@@ -21,7 +21,7 @@ _REPO_ROOT = Path(__file__).parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from tools.claude_cli import call_claude_file_based
+from tools.claude_cli import DEFAULT_MODEL, call_claude_file_based
 
 _REPO_DATA = Path(__file__).parent.parent / "data"
 _GUIDELINE = _REPO_DATA / "guideline_kedaibiao.md"
@@ -49,6 +49,64 @@ def srt_to_text(srt_path: Path) -> str:
             continue
         lines.append(line)
     return " ".join(lines)
+
+
+def _format_timestamp(seconds: int) -> str:
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    if hours:
+        return f"{hours:02d}:{minutes:02d}"
+    return f"{minutes:02d}:00"
+
+
+def _parse_start_seconds(time_line: str) -> int | None:
+    match = re.match(
+        r"^(\d{2}):(\d{2}):(\d{2})[,\.]\d{3}\s*-->",
+        time_line.strip(),
+    )
+    if not match:
+        return None
+    hours, minutes, seconds = (int(part) for part in match.groups())
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def srt_to_timed_text(srt_path: Path, window_seconds: int = 60) -> str:
+    """提取 SRT 文本，并按时间窗口合并，保留高光定位需要的粗时间戳。"""
+    content = srt_path.read_text(encoding="utf-8")
+    buckets: dict[int, list[str]] = {}
+    current_start: int | None = None
+    current_lines: list[str] = []
+
+    def flush_current() -> None:
+        nonlocal current_start, current_lines
+        if current_start is None or not current_lines:
+            current_start = None
+            current_lines = []
+            return
+        bucket_start = (current_start // window_seconds) * window_seconds
+        buckets.setdefault(bucket_start, []).append("".join(current_lines))
+        current_start = None
+        current_lines = []
+
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line:
+            flush_current()
+            continue
+        if re.match(r"^\d+$", line):
+            continue
+        start_seconds = _parse_start_seconds(line)
+        if start_seconds is not None:
+            flush_current()
+            current_start = start_seconds
+            continue
+        current_lines.append(line)
+    flush_current()
+
+    return "\n".join(
+        f"[{_format_timestamp(start)}] {' '.join(texts)}"
+        for start, texts in sorted(buckets.items())
+    )
 
 
 def extract_appended_highlights(srt_path: Path) -> str:
@@ -141,7 +199,7 @@ HIGHLIGHTS_FROM_ACTUAL = """\
 
 **单口**：分析这段话如何代表主播的核心判断，以及制造了什么悬念。
 
-输出：视频类型和主发言人、中心命题、受众分析、每段高光的引用原话 + vantage point 分析（仅访谈）+ cognitive gap + 在整体叙事中的位置、整组高光的叙事弧线以及各段之间的组合逻辑。
+输出：视频类型和主发言人、中心命题、受众分析、每段高光的时间戳 + 引用原话 + vantage point 分析（仅访谈）+ cognitive gap + 为什么值得观众跳转观看 + 在整体叙事中的位置、整组高光的叙事弧线以及各段之间的组合逻辑。
 """
 
 HIGHLIGHTS_FROM_SCAN = """\
@@ -167,7 +225,7 @@ HIGHLIGHTS_FROM_SCAN = """\
 
 对每段候选片段问：「只有在嘉宾那个位置的人才能说这句话吗？」+「听完会产生什么具体问题？」两个都是 yes 才是强力候选。
 
-访谈输出 **5-6 段**候选高光，覆盖嘉宾的不同侧面（经历故事、行业判断、反常识观点……），让编辑从中选组合。
+访谈输出 **6-8 段**候选高光，覆盖嘉宾的不同侧面（经历故事、行业判断、反常识观点、产品/技术关键解释、创业选择……），让编辑从中选组合。每段必须带可跳转时间戳，说明观众为什么应该跳到这里看。
 
 **单口**：选主播的核心论断，能代表这期内容最有价值的判断，让人感觉「这个人真的想清楚了」。输出 3-4 段候选。
 
@@ -175,26 +233,36 @@ HIGHLIGHTS_FROM_SCAN = """\
 
 只用原话，不改写不总结。
 
-输出：视频类型和主发言人、中心命题（一句话）、受众分析（现有受众 + 潜在扩展人群）、每段候选的引用原话 + vantage point（仅访谈）+ cognitive gap + 在整体叙事中的位置、整组候选的叙事弧线和推荐组合。
+输出：视频类型和主发言人、中心命题（一句话）、受众分析（现有受众 + 潜在扩展人群）、每段候选的时间戳 + 引用原话 + vantage point（仅访谈）+ cognitive gap + 观看价值说明 + 在整体叙事中的位置、整组候选的叙事弧线和推荐组合。
 """
 
 
 # ── 主逻辑 ────────────────────────────────────────────────────────────────────
 
-def generate_highlights(srt_path: Path) -> Path:
-    stem = srt_path.with_suffix("").stem
+def _episode_stem(path: Path) -> str:
+    stem = path.with_suffix("").stem
     for suffix in (".final", ".corrected", ".qwen", ".article"):
         if stem.endswith(suffix):
-            stem = stem[: -len(suffix)]
-            break
-    output_path = srt_path.parent / f"{stem}.highlights.md"
+            return stem[: -len(suffix)]
+    return stem
+
+
+def generate_highlights(
+    srt_path: Path,
+    output_dir: Path | None = None,
+    stem: str | None = None,
+) -> Path:
+    episode_stem = stem or _episode_stem(srt_path)
+    out_dir = output_dir or srt_path.parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+    output_path = out_dir / f"{episode_stem}.highlights.md"
 
     # 读取内容
     if srt_path.suffix == ".md":
         full_text = srt_path.read_text(encoding="utf-8")
         actual_highlights = ""
     else:
-        full_text = srt_to_text(srt_path)
+        full_text = srt_to_timed_text(srt_path)
         actual_highlights = extract_appended_highlights(srt_path)
 
     guideline = load_guideline()
@@ -213,7 +281,7 @@ def generate_highlights(srt_path: Path) -> Path:
         prompt = HIGHLIGHTS_FROM_SCAN.format(guideline=guideline, content=content)
 
     print("    高光分析中…", flush=True)
-    call_claude_file_based(prompt, output_path)
+    call_claude_file_based(prompt, output_path, model=DEFAULT_MODEL)
     print(f"    ✓ {output_path.name} 已写入")
     return output_path
 
@@ -221,6 +289,11 @@ def generate_highlights(srt_path: Path) -> Path:
 def main() -> None:
     parser = argparse.ArgumentParser(description="从 SRT 提取/分析视频高光片段 v2")
     parser.add_argument("content", help="输入文件：.final.srt / .corrected.srt / .article.md")
+    parser.add_argument(
+        "-o", "--output-dir",
+        default=None,
+        help="输出目录（默认与输入文件同目录）",
+    )
     args = parser.parse_args()
 
     srt_path = Path(args.content).resolve()
@@ -230,7 +303,10 @@ def main() -> None:
 
     print(f"  高光提取：{srt_path.name} …", flush=True)
     try:
-        out = generate_highlights(srt_path)
+        out = generate_highlights(
+            srt_path,
+            output_dir=Path(args.output_dir).resolve() if args.output_dir else None,
+        )
         print(f"  ✓ 高光已写入：{out.name}")
     except Exception as e:
         print(f"  ✗ 失败: {e}")
