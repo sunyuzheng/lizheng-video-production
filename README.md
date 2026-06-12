@@ -5,13 +5,13 @@
 | 步骤 | 内容 | 输出文件 | 依赖 |
 |------|------|---------|------|
 | 1. 转录 | Qwen3-ASR 本地转录 | `.qwen.srt` | 本地模型（完全离线） |
-| 2. 字幕校对 | ASR 纠错专有名词/同音字 | `.corrected.srt` | Claude Code CLI |
+| 2. 字幕校对 | ASR 纠错专有名词/同音字 | `.corrected.srt` | Codex CLI |
 | 3. 断句 | 每条 ≤20 字重新断句 | `.final.srt` | 本地规则（无需 API） |
-| 4. 生成文章 | 提炼频道风格文章 | `.article.md` | Claude Code CLI |
-| 5. 提取高光 | 识别视频开头高光片段，分析叙事弧 | `.highlights.md` | Claude Code CLI |
-| 6. 生成标题 | 三轮 Opus 工作流，高光驱动 | `.titles.md` | Claude Code CLI |
+| 4. 提取高光 | 识别视频开头高光片段，分析叙事弧 | `.highlights.md` | Claude Code CLI |
+| 5. 生成文章 | 提炼频道风格文章 | `.article.md` | Claude Code CLI |
+| 6. 生成标题 | 三轮 Fable 5 工作流，高光驱动 | `.titles.md` | Claude Code CLI |
 
-步骤 1、3 完全本地运行，无需任何 API Key。步骤 2、4、5、6 统一通过 Claude Code CLI（`claude` 命令）以文件响应模式调用，默认使用 claude-opus-4-6。
+步骤 1、3 完全本地运行，无需任何 API Key。步骤 2 通过 Codex CLI（`codex` 命令）以文件响应模式调用；步骤 4、5、6 通过 Claude Code CLI（`claude` 命令）以文件响应模式调用，默认使用 `claude-fable-5`。
 
 ---
 
@@ -21,10 +21,11 @@
 |------|------|
 | **电脑** | Apple Silicon Mac（M1 / M2 / M3 / M4） |
 | **Python** | 3.10 或更高版本 |
-| **Claude Code CLI** | 所有 AI 步骤均需要，`which claude` 确认已安装并登录 |
+| **Codex CLI** | 字幕校对需要，`which codex` 确认已安装并登录 |
+| **Claude Code CLI** | 高光、文章、标题生成需要，`which claude` 确认已安装并登录 |
 
 > Windows / Intel Mac 暂不支持（转录模型 mlx-qwen3-asr 只支持 Apple Silicon）。  
-> 不再需要配置 ANTHROPIC_API_KEY 或其他 API Key，所有 AI 调用通过已登录的 Claude Code CLI 完成。
+> 不再需要配置 ANTHROPIC_API_KEY 或其他 API Key，AI 调用通过已登录的 Codex CLI 和 Claude Code CLI 完成。
 
 ---
 
@@ -39,9 +40,11 @@ venv/bin/pip install -r requirements.txt
 
 安装时间约 3-10 分钟，mlx-qwen3-asr 首次安装后第一次运行时还会自动下载模型（约 1.5 GB）。
 
-确认 Claude Code CLI 已安装并登录：
+确认 Codex CLI 和 Claude Code CLI 已安装并登录：
 
 ```bash
+which codex         # 应输出路径
+codex --version    # 应输出版本号
 which claude        # 应输出路径
 claude --version    # 应输出版本号
 ```
@@ -68,17 +71,18 @@ venv/bin/python tools/process_video.py 视频.mp4 --seeds 嘉宾名 "公司名"
 caffeinate -i venv/bin/python tools/process_video.py 视频.mp4 --no-seeds
 ```
 
-### 情况 B：已有 SRT，只补高光 + 标题
+### 情况 B：已有 SRT，只补高光 + 文章 + 标题
 
 ```bash
-venv/bin/python tools/generate_highlights.py /path/to/视频名.final.srt
-venv/bin/python tools/generate_titles.py /path/to/视频名.article.md
+venv/bin/python tools/generate_highlights.py /path/to/视频名.final.srt -o /path/to/video-dir
+venv/bin/python tools/generate_article.py /path/to/视频名.final.srt -o /path/to/video-dir
+venv/bin/python tools/generate_titles.py /path/to/视频名.article.md -o /path/to/video-dir --workspace-dir /path/to/视频名_process
 ```
 
 ### 情况 C：只需标题（已有 highlights）
 
 ```bash
-venv/bin/python tools/generate_titles.py /path/to/视频名.article.md
+venv/bin/python tools/generate_titles.py /path/to/视频名.article.md -o /path/to/video-dir --workspace-dir /path/to/视频名_process
 ```
 
 ---
@@ -89,45 +93,61 @@ venv/bin/python tools/generate_titles.py /path/to/视频名.article.md
 |------|------|
 | `--seeds 名字 术语` | 注入专有名词，提高 ASR 准确率（多个用空格分隔） |
 | `--no-seeds` | 跳过术语输入，直接开始 |
-| `--skip-transcribe` | 跳过转录（已有 `.qwen.srt`） |
+| `--skip-transcribe` | 跳过转录（已有 `视频名_process/视频名.qwen.srt`） |
 | `--skip-correct` | 跳过字幕校对 |
 | `--skip-article` | 跳过文章生成 |
 | `--skip-highlights` | 跳过高光提取（已有 `.highlights.md` 或不需要标题） |
 | `--skip-titles` | 跳过标题生成 |
+| `--process-dir DIR` | 指定过程文件目录（默认 `视频名_process/`） |
 | `--max-chars N` | 每条字幕最大字数（默认 20） |
 
 ---
 
 ## 输出文件
 
-所有文件生成在**视频同目录**：
+交付文件生成在**视频同目录**：
 
 | 文件 | 说明 | 用途 |
 |------|------|------|
-| `视频名.qwen.srt` | Qwen 原始转录，未校对 | 备份 |
-| `视频名.corrected.srt` | 校对后字幕 | 备份 |
 | `视频名.final.srt` | 最终字幕，≤20字/条 | **导入剪辑软件用这个** |
 | `视频名.article.md` | 频道风格文章 | 内容归档；也是标题生成的输入 |
 | `视频名.highlights.md` | 高光分析（中心命题+受众+叙事弧） | 标题锚点 |
 | `视频名.titles.md` | 最终标题候选 + 封面建议 | **取标题用这个** |
-| `视频名_title_ws/` | 标题中间文件（round0/round1） | 调试用，可删 |
+
+过程文件生成在**视频同目录的 `视频名_process/`**：
+
+| 文件 | 说明 |
+|------|------|
+| `视频名.qwen.srt` | Qwen 原始转录，未校对 |
+| `视频名.corrected.srt` | Claude 校对后字幕 |
+| `视频名_title_ws/` | 标题中间文件（round0/round1） |
 
 ---
 
 ## 关键设计
 
+### 文章生成口吻
+
+`generate_article.py` 的目标是把口播整理成更清楚的本人叙述，而不是 AI 观点包装。文章应像主播自己讲故事：具体、直接、有推理过程，只是更结构化。
+
+重点约束：
+- 少用 `不是……而是……`，全文最多 1 次
+- 不写冒犯观众的话，例如 `不是因为你蠢`
+- 不硬造 `XX法则`、`XX障碍`、`XX之墙` 等玄虚概念
+- 优先保留具体案例、第一人称判断和推理来路
+
 ### 文件响应模式（v4 核心改动）
 
-所有 AI 步骤统一使用文件响应模式（`tools/claude_cli.py`）：
+所有 AI 步骤使用文件响应模式：
 
 1. 任务描述 + 内容写入临时文件
-2. 告知 Claude：读取任务文件，将完整输出写入目标文件
+2. 告知 Codex 或 Claude：读取任务文件，将完整输出写入目标文件
 3. Python 读取目标文件
 
 相比 pipe 模式（`claude -p <内联 prompt>`）的优势：
-- **不截断**：Claude 的心理模型是"完成工作并保存"，而非"对话回答"
+- **不截断**：CLI 的心理模型是"完成工作并保存"，而非"对话回答"
 - **无参数长度限制**：大内容通过文件传递
-- **全文上下文**：字幕校对不再分批，Claude 可见完整内容
+- **全文上下文**：字幕校对不再分批，Codex 可见完整内容
 
 ### 高光检测逻辑（`generate_highlights.py`）
 
@@ -153,7 +173,7 @@ venv/bin/python tools/generate_titles.py /path/to/视频名.article.md
 | 30 分钟 | 6-10 分钟 | 2-3 分钟 | <1 分钟 | 3-5 分钟 | 3-5 分钟 | 10-15 分钟 | **~25-40 分钟** |
 | 60 分钟 | 15-20 分钟 | 3-5 分钟 | <1 分钟 | 4-6 分钟 | 3-5 分钟 | 10-15 分钟 | **~38-53 分钟** |
 
-步骤 1 用本地模型（离线，不收费）；步骤 2-6 通过 Claude Code CLI 调用 Opus 4.6，每期约 ¥5-15。
+步骤 1 用本地模型（离线，不收费）；步骤 2 通过 Codex CLI；步骤 4-6 通过 Claude Code CLI 调用 Fable 5。
 
 ---
 
@@ -173,7 +193,8 @@ venv/bin/python tools/generate_titles.py /path/to/视频名.article.md
 | 脚本 | 功能 |
 |------|------|
 | `tools/process_video.py` | 主入口，6步流程一体化 |
-| `tools/claude_cli.py` | 文件响应模式 Claude CLI 工具（所有 AI 步骤共用） |
+| `tools/codex_cli.py` | 文件响应模式 Codex CLI 工具（字幕校对） |
+| `tools/claude_cli.py` | 文件响应模式 Claude CLI 工具（高光、文章、标题） |
 | `tools/correct/correct_srt.py` | 字幕校对引擎（可单独调用） |
 | `tools/resplit_srt.py` | 断句工具（可单独调用） |
 | `tools/generate_article.py` | 文章生成（可单独调用） |
@@ -187,8 +208,8 @@ venv/bin/python tools/generate_titles.py /path/to/视频名.article.md
 **Q：运行时报 `未安装 mlx-qwen3-asr`？**  
 A：确认用的是 `venv/bin/python`，而不是系统自带的 `python3`。如果确认无误还是报错，手动安装：`venv/bin/pip install mlx-qwen3-asr`。
 
-**Q：AI 步骤报错 `claude: command not found`？**  
-A：Claude Code CLI 未安装或未在 PATH 中。运行 `which claude` 确认，参考 Claude Code 官方文档安装。
+**Q：AI 步骤报错 `codex: command not found` 或 `claude: command not found`？**  
+A：对应 CLI 未安装或未在 PATH 中。运行 `which codex` / `which claude` 确认。
 
 **Q：高光分析选错了角度？**  
 A：在 SRT 文件末尾手动追加高光字幕（见上方「高光检测逻辑」），系统会优先使用编辑者亲选的片段。

@@ -2,3 +2,4 @@ anthropic>=0.40.0
 openai>=1.0.0
 google-genai>=1.0.0
 mlx-qwen3-asr>=0.1.0
+jieba

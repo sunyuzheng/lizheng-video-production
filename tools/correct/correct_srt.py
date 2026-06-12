@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-correct_srt.py v3 — 候选词驱动校对引擎（Claude CLI 文件响应模式）
+correct_srt.py v4 — 候选词驱动校对引擎（Codex CLI 文件响应模式）
+
+相比 v3 的改动：
+  - 字幕精校改用 Codex CLI 文件响应模式（codex_cli.call_codex_file_based）
 
 相比 v2 的改动：
   - 去掉多 provider 直接 API 调用（Anthropic/OpenAI/Gemini SDK）
-  - 改用 Claude CLI 文件响应模式（claude_cli.call_claude_file_based）
-  - 候选词扫描 + 全文扫描合并为单次 Claude 调用，全文上下文更完整
-  - 无需 API Key 配置，使用已登录的 Claude Code CLI
+  - 改用文件响应模式
+  - 候选词扫描 + 全文扫描合并为单次 CLI 调用，全文上下文更完整
+  - 无需 API Key 配置，使用已登录的 CLI
 
 用法：
   from tools.correct.correct_srt import correct_file
@@ -19,13 +22,14 @@ import re
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 # 确保 repo root 在 sys.path 中（process_video.py 会把 tools/correct/ 插入路径，导致 tools 包找不到）
 _REPO_ROOT = Path(__file__).parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from tools.claude_cli import call_claude_file_based, DEFAULT_MODEL
+from tools.codex_cli import DEFAULT_CODEX_MODEL, call_codex_file_based
 
 # ── 配置 ─────────────────────────────────────────────────────────────────────
 _ROOT = Path(__file__).parent.parent.parent
@@ -187,7 +191,7 @@ def scan_flags(chunks: list[dict], candidates: dict) -> list[dict]:
     return flags
 
 
-# ── Claude CLI 校对调用 ──────────────────────────────────────────────────────
+# ── Codex CLI 校对调用 ───────────────────────────────────────────────────────
 
 def build_correction_prompt(chunks: list[dict], flags: list[dict]) -> str:
     """构建完整校对 prompt（合并候选词扫描 + 全文扫描）"""
@@ -226,6 +230,10 @@ def build_correction_prompt(chunks: list[dict], flags: list[dict]) -> str:
 找出并修正 ASR 语音识别造成的错别字：
 - 同音字混淆（如「刘佳」→「刘嘉」，「沉浮」→「臣服」）
 - 英文品牌/术语拼写错误（如「Superlillian」→「Superlinear」）
+- 人名/公司名/产品名实体错误，并做全文一致性统一。重点检查嘉宾的公司、产品、头衔：ASR 常把不熟悉的英文名听成常见词或人名（真实案例：嘉宾任职的公司「Gen」被转成「Jan」和「Jane」两种写法）。先从上下文推断正确实体名，再把全文所有变体统一成同一写法
+
+## 覆盖要求
+从第一段扫到最后一段，不要扫到前半就停。一两个小时的视频通常有几十处可修正的错误；如果你只找到个位数，大概率是没扫完，回头再扫一遍。判断标准不变：每一处都要有上下文依据，宁可漏改不要误改——但「漏改」指不确定的不改，不是没看到。
 
 ## 绝对禁止
 - 删除/增加实词（名词、动词、形容词）
@@ -246,15 +254,15 @@ def build_correction_prompt(chunks: list[dict], flags: list[dict]) -> str:
 - 只输出 JSON 数组，不要其他内容"""
 
 
-def call_claude_for_corrections(
+def call_codex_for_corrections(
     chunks: list[dict],
     flags: list[dict],
-    model: str = DEFAULT_MODEL,
+    model: str | None = DEFAULT_CODEX_MODEL,
     timeout: int = 300,
 ) -> list[dict]:
     """
     文件响应模式：将全文 SRT + 候选词提示写入临时文件，
-    让 Claude 将 JSON 修正数组写入另一临时文件，Python 读取并返回。
+    让 Codex 将 JSON 修正数组写入另一临时文件，Python 读取并返回。
     """
     prompt = build_correction_prompt(chunks, flags)
 
@@ -266,7 +274,7 @@ def call_claude_for_corrections(
         corrections_file = Path(f.name)
 
     try:
-        call_claude_file_based(prompt, corrections_file, model=model, timeout=timeout)
+        call_codex_file_based(prompt, corrections_file, model=model, timeout=timeout, cwd=_REPO_ROOT)
         raw = corrections_file.read_text(encoding="utf-8").strip()
         return parse_llm_response(raw)
     except Exception:
@@ -553,16 +561,16 @@ def check_entity_consistency(chunks: list[dict], seeds: list[str]) -> tuple[list
 def correct_file(
     qwen_path: Path,
     episode_seeds: list[str] | None = None,
-    model: str = DEFAULT_MODEL,
+    model: str | None = DEFAULT_CODEX_MODEL,
     verbose: bool = False,
-) -> Path | None:  # model 参数保留兼容接口，实际固定用 Claude CLI
+) -> Path | None:
     """
     对单个 .qwen.srt 文件进行校对，生成 .corrected.srt。
 
     Args:
         qwen_path: .qwen.srt 文件路径
         episode_seeds: 本期嘉宾名、品牌名等（如 ["刘嘉", "Superlinear Academy"]）
-        model: Claude 模型
+        model: Codex 模型；None 表示使用 Codex CLI 默认配置
         verbose: 是否打印详细日志
     """
     if not qwen_path.exists():
@@ -588,11 +596,11 @@ def correct_file(
     if fmt_count:
         print(f"  格式规范化: {fmt_count} 处", flush=True)
 
-    # ── 步骤 2：候选词扫描 + Claude CLI 全文校对（合并为单次调用）────────────
+    # ── 步骤 2：候选词扫描 + Codex CLI 全文校对（合并为单次调用）─────────────
     all_flags = scan_flags(chunks, candidates)
     total_flags = len(all_flags)
 
-    parsed = call_claude_for_corrections(chunks, all_flags, model=model)
+    parsed = call_codex_for_corrections(chunks, all_flags, model=model)
     chunk_texts = [c["text"] for c in chunks]
     corrs = validate_corrections(parsed, chunk_texts, all_flags)
     corrected = apply_corrections(list(chunks), corrs)
@@ -624,11 +632,15 @@ def correct_file(
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="字幕校对 v3（Claude CLI 文件响应模式）")
+    parser = argparse.ArgumentParser(description="字幕校对 v4（Codex CLI 文件响应模式）")
     parser.add_argument("qwen_srt", help=".qwen.srt 文件路径")
     parser.add_argument("--seeds", nargs="*", default=[],
                         help="本期嘉宾名/术语（空格分隔）")
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_CODEX_MODEL,
+        help="Codex CLI 模型；不传则使用 Codex 默认配置",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 

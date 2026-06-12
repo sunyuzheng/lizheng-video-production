@@ -7,7 +7,7 @@ generate_titles.py — 课代表立正播客标题三轮生成工作流 v4
   - 去掉"入口"分类标注要求：候选不再需要标注入口类型，直接说角度为何有吸引力
   - 放宽高光-标题强约束：强标题优先保留，与高光不配合时注明供终审判断，不自动降级
   - Round 1 使用频道真实高播标题作外部基准（不是模型自评）
-  - 三轮全程使用 claude-opus-4-6，timeout 900s
+  - 三轮全程使用 Claude Code Fable 5，timeout 900s
 
 用法：
   python3 tools/generate_titles.py episode.article.md        # 自动检测同目录 highlights
@@ -24,7 +24,7 @@ _REPO_ROOT = Path(__file__).parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from tools.claude_cli import call_claude_file_based
+from tools.claude_cli import DEFAULT_MODEL, call_claude_file_based
 
 # ── 路径 ────────────────────────────────────────────────────────────────────────
 
@@ -47,11 +47,16 @@ def load_top_titles() -> str:
     return ""
 
 
-def find_highlights(content_path: Path, stem: str) -> str:
-    """自动检测同目录下是否有 {stem}.highlights.md"""
-    h_path = content_path.parent / f"{stem}.highlights.md"
-    if h_path.exists():
-        return h_path.read_text(encoding="utf-8")
+def find_highlights(content_path: Path, stem: str, output_dir: Path | None = None) -> str:
+    """自动检测输出目录或同目录下是否有 {stem}.highlights.md"""
+    search_dirs = []
+    if output_dir:
+        search_dirs.append(output_dir)
+    search_dirs.append(content_path.parent)
+    for base in search_dirs:
+        h_path = base / f"{stem}.highlights.md"
+        if h_path.exists():
+            return h_path.read_text(encoding="utf-8")
     return ""
 
 
@@ -184,7 +189,17 @@ ROUND2_PROMPT = """\
 
 每条封面建议说清楚：主内容是什么、画面怎么构成、封面和标题如何互补。
 
-最后列出值得保留的备选（说明为什么没进最终）。
+## 输出文件格式（这是给剪辑师和主播单独阅读的交付文件，不是给你自己的笔记）
+
+固定三段结构，顺序不可变：
+
+1. `## 最终标题`——置顶，按推荐顺序编号。每条带标题文本（标注字数）和一段自我完备的推荐理由，最后给一行投放建议。
+2. `## 前 5 标题的封面建议`
+3. `## 备选`——每条写出标题完整原文和未进最终的原因。
+
+硬性要求：
+- **禁止出现任何轮次代号**（A1、B3、R2-4、「Round 1 指令」「Round 0 候选」这类）。读这个文件的人没看过前几轮的工作文件。需要对比其他候选时，直接引用那条标题的原文。
+- 按指令补充候选、填补盲区这些推理过程在心里完成，不要写进文件——文件里只留结果和结果的理由。
 """
 
 
@@ -204,7 +219,7 @@ def run_round0(content: str, highlights: str, workspace: Path) -> Path:
         )
 
     print("    Round 0：理解内容 + 多角度生成候选…", flush=True)
-    call_claude_file_based(prompt, out)
+    call_claude_file_based(prompt, out, model=DEFAULT_MODEL)
     print(f"    ✓ {out.name} 已写入")
     return out
 
@@ -229,7 +244,7 @@ def run_round1(round0: Path, highlights: str, workspace: Path) -> Path:
     )
 
     print("    Round 1：外部基准对比 + 差距诊断…", flush=True)
-    call_claude_file_based(prompt, out)
+    call_claude_file_based(prompt, out, model=DEFAULT_MODEL)
     print(f"    ✓ {out.name} 已写入")
     return out
 
@@ -248,24 +263,33 @@ def run_round2(round0: Path, round1: Path, highlights: str, final_out: Path) -> 
     )
 
     print("    Round 2：补强 + 最终选题…", flush=True)
-    call_claude_file_based(prompt, final_out)
+    call_claude_file_based(prompt, final_out, model=DEFAULT_MODEL)
     print(f"    ✓ {final_out.name} 已写入")
     return final_out
 
 
 # ── 主流程 ──────────────────────────────────────────────────────────────────────
 
-def generate_titles(content_path: Path, stop_at_round: int = 2) -> Path:
-    stem = content_path.with_suffix("").stem
-    for suffix in (".article", ".final", ".corrected"):
-        if stem.endswith(suffix):
-            stem = stem[: -len(suffix)]
+def generate_titles(
+    content_path: Path,
+    stop_at_round: int = 2,
+    output_dir: Path | None = None,
+    workspace_dir: Path | None = None,
+    stem: str | None = None,
+) -> Path:
+    episode_stem = stem or content_path.with_suffix("").stem
+    for suffix in (".article", ".final", ".corrected", ".qwen"):
+        if episode_stem.endswith(suffix):
+            episode_stem = episode_stem[: -len(suffix)]
             break
 
-    base_dir = content_path.parent
-    workspace = base_dir / f"{stem}_title_ws"
+    out_dir = output_dir or content_path.parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+    workspace_base = workspace_dir or out_dir
+    workspace_base.mkdir(parents=True, exist_ok=True)
+    workspace = workspace_base / f"{episode_stem}_title_ws"
     workspace.mkdir(exist_ok=True)
-    final_out = base_dir / f"{stem}.titles.md"
+    final_out = out_dir / f"{episode_stem}.titles.md"
 
     # 读取主内容
     if content_path.suffix == ".md":
@@ -276,9 +300,9 @@ def generate_titles(content_path: Path, stop_at_round: int = 2) -> Path:
         content = srt_to_text(content_path, max_chars=6000)
 
     # 自动检测高光文件
-    highlights = find_highlights(content_path, stem)
+    highlights = find_highlights(content_path, episode_stem, output_dir=out_dir)
     if highlights:
-        print(f"    ✓ 发现高光文件 {stem}.highlights.md，高光驱动模式启动")
+        print(f"    ✓ 发现高光文件 {episode_stem}.highlights.md，高光驱动模式启动")
     else:
         print(f"    ! 未找到高光文件，使用完整内容模式")
 
@@ -300,6 +324,16 @@ def main() -> None:
         "--round", type=int, default=2, choices=[0, 1, 2],
         help="停在第几轮（0=只生成候选，1=+评审，2=完整）",
     )
+    parser.add_argument(
+        "-o", "--output-dir",
+        default=None,
+        help="最终标题输出目录（默认与输入文件同目录）",
+    )
+    parser.add_argument(
+        "--workspace-dir",
+        default=None,
+        help="标题三轮过程文件目录（默认与最终标题同目录）",
+    )
     args = parser.parse_args()
 
     content_path = Path(args.content).resolve()
@@ -309,7 +343,12 @@ def main() -> None:
 
     print(f"  标题生成：{content_path.name} …", flush=True)
     try:
-        out = generate_titles(content_path, stop_at_round=args.round)
+        out = generate_titles(
+            content_path,
+            stop_at_round=args.round,
+            output_dir=Path(args.output_dir).resolve() if args.output_dir else None,
+            workspace_dir=Path(args.workspace_dir).resolve() if args.workspace_dir else None,
+        )
         print(f"  ✓ 标题已写入：{out.name}")
     except Exception as e:
         print(f"  ✗ 失败: {e}")

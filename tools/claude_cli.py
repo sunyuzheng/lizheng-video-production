@@ -13,7 +13,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-DEFAULT_MODEL = "claude-opus-4-6"
+DEFAULT_MODEL = "claude-fable-5"
+FALLBACK_CODEX_MODEL = "gpt-5.5"
 
 
 def call_claude_file_based(
@@ -21,22 +22,52 @@ def call_claude_file_based(
     output_path: Path,
     model: str = DEFAULT_MODEL,
     timeout: int = 900,
+    fallback: bool = True,
 ) -> str:
     """
-    文件响应模式：将 prompt 写入临时文件，让 Claude 直接将完整输出写入 output_path。
+    文件响应模式，带降级：优先 Claude（默认 claude-fable-5）；Claude CLI 不存在、
+    调用失败、超时或未写出文件时，自动降级到 Codex（gpt-5.5），产物文件约定不变。
 
     Args:
         prompt:      完整任务描述（包含上下文内容，可以很大）
-        output_path: Claude 将写入结果的目标文件
-        model:       Claude 模型，默认 claude-opus-4-6
+        output_path: 模型将写入结果的目标文件
+        model:       Claude 模型，默认 claude-fable-5
         timeout:     subprocess 超时秒数
+        fallback:    是否允许降级到 Codex，默认允许
 
     Returns:
         output_path 写入的内容字符串
 
     Raises:
-        RuntimeError: Claude 调用失败或未生成输出文件
+        RuntimeError: Claude 调用失败且降级被禁用，或降级后同样失败
     """
+    try:
+        return _call_claude_once(prompt, output_path, model=model, timeout=timeout)
+    except (RuntimeError, FileNotFoundError, subprocess.TimeoutExpired) as e:
+        if not fallback:
+            raise
+        print(
+            f"  ⚠ claude ({model}) 不可用，降级到 codex {FALLBACK_CODEX_MODEL}: "
+            f"{str(e)[:200]}",
+            flush=True,
+        )
+        try:
+            from tools.codex_cli import call_codex_file_based
+        except ImportError:
+            from codex_cli import call_codex_file_based
+
+        return call_codex_file_based(
+            prompt, output_path, model=FALLBACK_CODEX_MODEL, timeout=timeout
+        )
+
+
+def _call_claude_once(
+    prompt: str,
+    output_path: Path,
+    model: str,
+    timeout: int,
+) -> str:
+    """单次 Claude 调用：prompt 写临时文件，让 Claude 把完整输出写入 output_path。"""
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".md", delete=False,
         encoding="utf-8", prefix="kdb_task_",
