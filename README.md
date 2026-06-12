@@ -31,7 +31,7 @@
 
 **标题有两条路线**：上表第 6 步是路线 A（B站/YouTube 频道长标题）；路线 B 是小红书封面+标题，由 Claude Code 调用独立的 [`xhs-cover-title`](https://github.com/sunyuzheng) skill 产出 `.xhs.md`（封面文案 + ≤20 字标题，喂料用 seeds 身份信息和高光原话），不在本仓库脚本内。
 
-封面图三种比例（16:9、3:4、4:3）是发布设计步骤，由 agent 根据 `.xhs.md` / `.titles.md` 的封面建议和视频截图生成，不在 `process_video.py` 自动生成。
+封面图三种比例（16:9、3:4、4:3）是发布设计步骤，由 agent 根据 `.xhs.md` / `.titles.md` 的封面建议和视频截图生成，不在 `process_video.py` 自动生成。生成前先读 `skill/references/cover-style-guide.md`，按案例风格做黄白黑巨字短视频封面，不做干净海报或玻璃卡片。
 
 **引擎降级**：步骤 4-7 默认 `claude-fable-5`；CLI 不可用、超时或没写出文件时，`tools/claude_cli.py` 自动降级到 Codex `gpt-5.5`，产物文件约定不变，降级在输出里明示 ⚠。
 
@@ -114,9 +114,9 @@ venv/bin/python tools/generate_youtube_description.py /path/to/视频名.final.s
 | `视频名.titles.md` | 终审标题（标字数）+ 封面建议 + 备选 | **取标题用这个** |
 | `视频名.youtube-description.txt` | YouTube 介绍 + 简洁章节（mm:ss，从 00:00 开始） | 复制到 YouTube description |
 | `视频名.xhs.md` | 小红书封面+标题方案（发小红书时生成） | 小红书发布 |
-| `视频名.cover.png` / `视频名.youtube-cover.png` | 16:9 带字封面图 | YouTube / 旧流程主封面 |
-| `视频名.xhs-cover.png` | 3:4 带字封面图，推荐两张截图上下叠放，中间放字 | 小红书 |
-| `视频名.bili-douyin-videohao-cover.png` | 4:3 带字封面图 | B站 / 抖音 / 视频号 |
+| `视频名.cover-16x9.png` / `视频名.cover.png` | 16:9 带字封面图 | YouTube / 旧流程主封面 |
+| `视频名.cover-3x4.png` | 3:4 带字封面图，推荐两张截图上下叠放，中间放字 | 小红书 |
+| `视频名.cover-4x3.png` | 4:3 带字封面图 | B站 / 抖音 / 视频号 |
 
 **工作区** = `视频名_process/`：`*.qwen.srt`（原始转录，永不覆盖）、`*.corrected.srt`（精校稿）、`*_title_ws/`（标题轮次中间文件）。过程文件不当交付。
 

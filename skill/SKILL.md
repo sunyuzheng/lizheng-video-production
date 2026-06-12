@@ -92,15 +92,17 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md
 
 封面默认带字，文字优先来自 `.xhs.md` 或 `.titles.md` 里的封面建议，不临场硬编。优先用用户提供的现场照、视频截图或关键帧作 reference；如果从视频抽帧，必须检查人物没有被裁掉、表情清晰、文字没有压脸。
 
+生成前必须先读 `skill/references/cover-style-guide.md`，并对照 `skill/references/封面案例/` 的实际图片。目标风格是高点击短视频封面：真实截图作底，黄白黑巨字直接压画面，黑描边/投影保证缩略图可读；只允许硬边黑条/黄条承载小信息。不要做半透明玻璃卡片、圆角海报卡、渐变装饰块或干净留白海报。
+
 默认交付三种比例：
-- `<video>.youtube-cover.png`：16:9，用于 YouTube；`<video>.cover.png` 保持为同一张 16:9 主封面，方便旧流程取用。
-- `<video>.xhs-cover.png`：3:4，用于小红书；推荐两张截图上下叠放，中间留文字带。
-- `<video>.bili-douyin-videohao-cover.png`：4:3，用于 B站、抖音、视频号。
+- `<video>.cover-16x9.png`：16:9，用于 YouTube；`<video>.cover.png` 可保持为同一张 16:9 主封面，方便旧流程取用。
+- `<video>.cover-3x4.png`：3:4，用于小红书；推荐两张截图上下叠放，中间用黄白巨字穿插，不要只做小字信息带。
+- `<video>.cover-4x3.png`：4:3，用于 B站、抖音、视频号。
 
 封面文字分工：
 - 主封面文案：短、狠、可一眼读完，优先用小红书路线 B 选定的封面文案。
 - 副文案：一句内容承诺或原文金句，不要复述标题。
-- 不额外加 logo 或水印；如果源视频截图已经烧进 logo，不要为了“去水印”粗暴涂抹到画面变脏，优先用文字面板遮住或换帧。
+- 不额外加 logo 或水印；如果源视频截图已经烧进 logo，不要为了“去水印”粗暴涂抹到画面变脏，优先换帧，或用案例风格里的黑条/黄条自然覆盖。
 
 如果用 **Codex CLI 侧的 `imagegen` skill** 做图（不是 Claude skill，产物落在 `$CODEX_HOME/generated_images/`），最终图仍必须拷贝到视频同目录，不能只留在 generated_images。
 
@@ -126,9 +128,9 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md
 | `<video>.titles.md` | 频道发布 | generate_titles.py |
 | `<video>.youtube-description.txt` | YouTube 发布 | generate_youtube_description.py |
 | `<video>.xhs.md` | 小红书发布 | xhs-cover-title skill |
-| `<video>.cover.png` / `<video>.youtube-cover.png` | 访谈发布默认 | 截图/设计或 imagegen |
-| `<video>.xhs-cover.png` | 小红书发布默认 | 截图/设计或 imagegen |
-| `<video>.bili-douyin-videohao-cover.png` | B站/抖音/视频号发布默认 | 截图/设计或 imagegen |
+| `<video>.cover-16x9.png` / `<video>.cover.png` | 访谈发布默认 | 截图/设计或 imagegen |
+| `<video>.cover-3x4.png` | 小红书发布默认 | 截图/设计或 imagegen |
+| `<video>.cover-4x3.png` | B站/抖音/视频号发布默认 | 截图/设计或 imagegen |
 
 不为形式完整强行生成用户没要的产物；用户明确说不要标题，就不生成 `.titles.md`。
 
