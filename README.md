@@ -1,19 +1,36 @@
-# 课代表立正 · 视频内容生产工具 v4
+# 课代表立正 · 视频后期生产（kdb-video-post-production）
 
-给定一个视频文件，自动完成六步流程，最终产出可用的字幕、文章、高光分析和标题候选。
+一段原始录制 → 四类内容资产：**精校字幕、高光、文章、标题**。本仓库同时包含 **skill**（工作流定义）和**实现**（流水线代码），2026-06-12 起合并为单一仓库，skill 和代码在同一个 commit 里同步演化。
 
-> **Skill 入口**：工作流的权威定义在 [`skill/SKILL.md`](skill/SKILL.md)（判型、三区、双路线标题、验收、持续校准），通过符号链接加载为 Claude Code 的 `kdb-video-post-production` skill。本 README 只讲仓库代码怎么跑。
+```
+.
+├── skill/SKILL.md        ← 工作流权威定义：判型、三区、流水线、交付物、验收、持续校准
+├── skill/references/     ← 来源与布局说明
+├── tools/                ← 流水线脚本（转写、精校、断句、高光、文章、标题）
+├── data/                 ← 资料区：频道 guideline、高播标题基准、术语库
+└── README.md             ← 本文件：仓库代码怎么跑
+```
 
-| 步骤 | 内容 | 输出文件 | 依赖 |
+**Skill 加载方式**：`~/.claude/skills/kdb-video-post-production` → `/Users/sunyuzheng/Desktop/AI/skills/kdb-video-post-production` → 本仓库 `skill/`（两级符号链接）。改 skill 只改 `skill/SKILL.md`，立即生效。
+
+---
+
+## 工作流总览
+
+第 0 步先**判型**：单口（口播）还是访谈，决定后面所有分流——文章形态（外发独立稿 vs 视频伴读稿）、高光数量（3-4 段 vs 6-8 段）、封面图（默认不做 vs 默认做）。判型由脚本从字幕内容自动完成。
+
+| 步骤 | 内容 | 输出文件 | 引擎 |
 |------|------|---------|------|
-| 1. 转录 | Qwen3-ASR 本地转录 | `.qwen.srt` | 本地模型（完全离线） |
-| 2. 字幕校对 | ASR 纠错专有名词/同音字 | `.corrected.srt` | Codex CLI |
-| 3. 断句 | 每条 ≤20 字重新断句 | `.final.srt` | 本地规则（无需 API） |
-| 4. 提取高光 | 识别视频开头高光片段，分析叙事弧 | `.highlights.md` | Claude Code CLI |
-| 5. 生成文章 | 提炼频道风格文章 | `.article.md` | Claude Code CLI |
-| 6. 生成标题 | 三轮 Fable 5 工作流，高光驱动 | `.titles.md` | Claude Code CLI |
+| 1. 转录 | Qwen3-ASR 本地转录（注入频道热词 + seeds） | `.qwen.srt` | 本地模型，完全离线 |
+| 2. 精校 | 同音字、专有名词、**实体全文一致性**（如公司名被听成两种写法） | `.corrected.srt` | Codex CLI |
+| 3. 断句 | **先合并再重切**：跨越 ASR 坏 cue 边界，按标点/jieba 词边界切 ≤20 字 | `.final.srt` | 本地规则，无需 API |
+| 4. 高光 | 独立的观众感模块：时间戳 + 原话 + cognitive gap + 叙事弧 + 剪辑组合 | `.highlights.md` | Claude Code CLI |
+| 5. 文章 | 按判型分流；自动读取高光做跳转地图；禁元叙述和空转总结 | `.article.md` | Claude Code CLI |
+| 6. 标题 | 三轮工作流，以频道真实高播标题为外部基准；终审置顶、无内部代号 | `.titles.md` | Claude Code CLI |
 
-步骤 1、3 完全本地运行，无需任何 API Key。步骤 2 通过 Codex CLI（`codex` 命令）以文件响应模式调用；步骤 4、5、6 通过 Claude Code CLI（`claude` 命令）以文件响应模式调用，默认使用 `claude-fable-5`。
+**标题有两条路线**：上表第 6 步是路线 A（B站/YouTube 频道长标题）；路线 B 是小红书封面+标题，由 Claude Code 调用独立的 [`xhs-cover-title`](https://github.com/sunyuzheng) skill 产出 `.xhs.md`（封面文案 + ≤20 字标题，喂料用 seeds 身份信息和高光原话），不在本仓库脚本内。
+
+**引擎降级**：步骤 4-6 默认 `claude-fable-5`；CLI 不可用、超时或没写出文件时，`tools/claude_cli.py` 自动降级到 Codex `gpt-5.5`，产物文件约定不变，降级在输出里明示 ⚠。
 
 ---
 
@@ -23,33 +40,22 @@
 |------|------|
 | **电脑** | Apple Silicon Mac（M1 / M2 / M3 / M4） |
 | **Python** | 3.10 或更高版本 |
-| **Codex CLI** | 字幕校对需要，`which codex` 确认已安装并登录 |
-| **Claude Code CLI** | 高光、文章、标题生成需要，`which claude` 确认已安装并登录 |
+| **Codex CLI** | 字幕精校 + 降级引擎，`which codex` 确认已安装并登录 |
+| **Claude Code CLI** | 高光、文章、标题生成，`which claude` 确认已安装并登录 |
 
-> Windows / Intel Mac 暂不支持（转录模型 mlx-qwen3-asr 只支持 Apple Silicon）。  
-> 不再需要配置 ANTHROPIC_API_KEY 或其他 API Key，AI 调用通过已登录的 Codex CLI 和 Claude Code CLI 完成。
-
----
+> Windows / Intel Mac 暂不支持（mlx-qwen3-asr 只支持 Apple Silicon）。
+> 无需配置任何 API Key，AI 调用全部通过已登录的 CLI 完成。
 
 ## 一次性安装
 
 ```bash
-git clone https://github.com/sunyuzheng/kdb-post-production.git
-cd kdb-post-production
+git clone https://github.com/sunyuzheng/kdb-video-post-production.git
+cd kdb-video-post-production
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 ```
 
-安装时间约 3-10 分钟，mlx-qwen3-asr 首次安装后第一次运行时还会自动下载模型（约 1.5 GB）。
-
-确认 Codex CLI 和 Claude Code CLI 已安装并登录：
-
-```bash
-which codex         # 应输出路径
-codex --version    # 应输出版本号
-which claude        # 应输出路径
-claude --version    # 应输出版本号
-```
+安装约 3-10 分钟；首次运行会自动下载转录模型（约 1.5 GB）。依赖里的 `jieba` 用于断句的词边界切分。
 
 ---
 
@@ -58,124 +64,89 @@ claude --version    # 应输出版本号
 ### 最常用：全链路处理
 
 ```bash
-venv/bin/python tools/process_video.py /path/to/视频.mp4 --no-seeds
+caffeinate -i venv/bin/python tools/process_video.py /path/to/视频.mp4 --seeds 嘉宾名 公司名 产品名
 ```
 
-有嘉宾名或专有名词时注入（提高转录准确率）：
+`caffeinate -i` 防止长视频跑到一半 Mac 休眠。没有专有名词时用 `--no-seeds`。
 
-```bash
-venv/bin/python tools/process_video.py 视频.mp4 --seeds 嘉宾名 "公司名"
-```
+**seeds 的双重作用**：注入 ASR 提高专有名词准确率；同时是小红书路线的「主人公背景」原料（身份词要带具体数字）。**单期实体（嘉宾公司名、产品名）只走 seeds，不进 `data/channel_vocab.json`**——词库只收频道级多期复用的术语。
 
-**防止 Mac 休眠（跑长视频时）：**
-
-```bash
-caffeinate -i venv/bin/python tools/process_video.py 视频.mp4 --no-seeds
-```
-
-### 情况 B：已有 SRT，只补高光 + 文章 + 标题
+### 已有 SRT，只补内容
 
 ```bash
 venv/bin/python tools/generate_highlights.py /path/to/视频名.final.srt -o /path/to/video-dir
-venv/bin/python tools/generate_article.py /path/to/视频名.final.srt -o /path/to/video-dir
-venv/bin/python tools/generate_titles.py /path/to/视频名.article.md -o /path/to/video-dir --workspace-dir /path/to/视频名_process
+venv/bin/python tools/generate_article.py    /path/to/视频名.final.srt -o /path/to/video-dir
+venv/bin/python tools/generate_titles.py     /path/to/视频名.article.md -o /path/to/video-dir --workspace-dir /path/to/视频名_process
 ```
 
-### 情况 C：只需标题（已有 highlights）
+顺序必须**先高光后文章**——`generate_article.py` 会自动读取同目录的 `highlights.md` 做选题、时间戳和原话线索。
 
-```bash
-venv/bin/python tools/generate_titles.py /path/to/视频名.article.md -o /path/to/video-dir --workspace-dir /path/to/视频名_process
-```
-
----
-
-## 所有参数
+### 所有参数
 
 | 参数 | 说明 |
 |------|------|
-| `--seeds 名字 术语` | 注入专有名词，提高 ASR 准确率（多个用空格分隔） |
-| `--no-seeds` | 跳过术语输入，直接开始 |
+| `--seeds 名字 术语` | 注入专有名词（多个用空格分隔；书面正确写法） |
+| `--no-seeds` | 跳过术语输入 |
 | `--skip-transcribe` | 跳过转录（已有 `视频名_process/视频名.qwen.srt`） |
-| `--skip-correct` | 跳过字幕校对 |
+| `--skip-correct` | 跳过字幕精校 |
+| `--skip-highlights` | 跳过高光提取 |
 | `--skip-article` | 跳过文章生成 |
-| `--skip-highlights` | 跳过高光提取（已有 `.highlights.md` 或不需要标题） |
 | `--skip-titles` | 跳过标题生成 |
 | `--process-dir DIR` | 指定过程文件目录（默认 `视频名_process/`） |
 | `--max-chars N` | 每条字幕最大字数（默认 20） |
 
 ---
 
-## 输出文件
+## 输出文件（三区约定）
 
-交付文件生成在**视频同目录**：
+**交付区** = 视频同目录：
 
 | 文件 | 说明 | 用途 |
 |------|------|------|
-| `视频名.final.srt` | 最终字幕，≤20字/条 | **导入剪辑软件用这个** |
-| `视频名.article.md` | 频道风格文章 | 内容归档；也是标题生成的输入 |
-| `视频名.highlights.md` | 高光分析（中心命题+受众+叙事弧） | 标题锚点 |
-| `视频名.titles.md` | 最终标题候选 + 封面建议 | **取标题用这个** |
+| `视频名.final.srt` | 最终字幕，≤20字/条，词不切开 | **导入剪辑软件用这个** |
+| `视频名.highlights.md` | 高光候选 + 叙事弧 + 推荐剪辑组合 | 剪辑跳转 + 标题原料 |
+| `视频名.article.md` | 单口外发稿 / 访谈伴读稿（按判型） | 发布 / 归档 |
+| `视频名.titles.md` | 终审标题（标字数）+ 封面建议 + 备选 | **取标题用这个** |
+| `视频名.xhs.md` | 小红书封面+标题方案（发小红书时生成） | 小红书发布 |
+| `视频名.cover.png` | 16:9 访谈封面图（访谈发布默认，Codex 侧 imagegen） | 封面底图，留白加字 |
 
-过程文件生成在**视频同目录的 `视频名_process/`**：
+**工作区** = `视频名_process/`：`*.qwen.srt`（原始转录，永不覆盖）、`*.corrected.srt`（精校稿）、`*_title_ws/`（标题轮次中间文件）。过程文件不当交付。
 
-| 文件 | 说明 |
-|------|------|
-| `视频名.qwen.srt` | Qwen 原始转录，未校对 |
-| `视频名.corrected.srt` | Claude 校对后字幕 |
-| `视频名_title_ws/` | 标题中间文件（round0/round1） |
+**资料区** = 本仓库 `data/` + `xhs-cover-title` skill 的词库样本库。只读引用，更新走「持续校准」（见 `skill/SKILL.md`）。
 
 ---
 
 ## 关键设计
 
-### 文章生成口吻
+### 文件响应模式
 
-`generate_article.py` 的目标是把口播整理成更清楚的本人叙述，而不是 AI 观点包装。文章应像主播自己讲故事：具体、直接、有推理过程，只是更结构化。
+所有 AI 步骤：任务写临时文件 → CLI 把完整输出写目标文件 → Python 读回。相比 pipe 模式：不截断、无参数长度限制、精校可见全文上下文。
 
-重点约束：
-- 少用 `不是……而是……`，全文最多 1 次
-- 不写冒犯观众的话，例如 `不是因为你蠢`
-- 不硬造 `XX法则`、`XX障碍`、`XX之墙` 等玄虚概念
-- 优先保留具体案例、第一人称判断和推理来路
+### 断句：先合并再重切（`resplit_srt.py`）
 
-### 文件响应模式（v4 核心改动）
+ASR 的原始 cue 边界经常落在词中间（「…这是你的事 / 情当然…」）。脚本先把停顿 ≤0.6s 的相邻 cue 合并成窗口（每字符按时长插值，时间锚点保留），再按「句末标点 → 子句标点 → jieba 词边界 → 强制截断」四级断句。下游高光/文章引用的时间戳在重切后仍然有效。
 
-所有 AI 步骤使用文件响应模式：
+### 文章口吻（`generate_article.py`）
 
-1. 任务描述 + 内容写入临时文件
-2. 告知 Codex 或 Claude：读取任务文件，将完整输出写入目标文件
-3. Python 读取目标文件
+像主播本人状态最好时写出的版本，不是 AI 观点包装。硬约束：
 
-相比 pipe 模式（`claude -p <内联 prompt>`）的优势：
-- **不截断**：CLI 的心理模型是"完成工作并保存"，而非"对话回答"
-- **无参数长度限制**：大内容通过文件传递
-- **全文上下文**：字幕校对不再分批，Codex 可见完整内容
+- **禁元叙述**：不写「核心命题可以压成一句话」「这段值得先看」「注意这里的证据等级」——直接给内容，让事实自己产生分量
+- **禁空转总结**：不写「每一个都被重新定义过」——直接说定义是什么、意义是什么
+- 少用「不是……而是……」；不硬造「XX法则」「XX之墙」；保留具体案例、第一人称判断和推理来路
 
-### 高光检测逻辑（`generate_highlights.py`）
+### 高光检测（`generate_highlights.py`）
 
-优先检测 SRT 末尾编辑者手动追加的高光字幕（时间戳重置为 `00:00:xx`），有则用亲选片段分析，无则扫全文。
+优先用 SRT 末尾编辑者手动追加的高光字幕（时间戳重置为 `00:00:xx` 的段落）；没有才全文扫描。手动追加方法：把选定片段的 SRT 行复制到 `.final.srt` 末尾。
 
-**手动追加高光**：把高光片段的 SRT 字幕行复制到 `.final.srt` 末尾即可。
-
-### 三轮标题工作流（`generate_titles.py`）
+### 三轮标题（`generate_titles.py`）
 
 | 轮次 | 角色 | 做什么 |
 |------|------|--------|
 | Round 0 | 资深编辑 | 理解高光 + 内容，发散生成候选 |
 | Round 1 | 独立评审 | 对比 `data/top_titles.txt`（频道 Top 25 真实高播标题）找盲区 |
-| Round 2 | 终审编辑 | 按 Round 1 指令补强，选出最终 6-10 个 + 封面建议 |
+| Round 2 | 终审编辑 | 补强 + 终审。交付文件固定结构：最终标题置顶、零轮次代号，推理过程留在 `_title_ws/` |
 
----
-
-## 时间参考
-
-| 视频时长 | 转录 | 校对 | 断句 | 文章 | 高光 | 标题 | **合计** |
-|---------|------|------|------|------|------|------|---------|
-| 10 分钟 | 2-3 分钟 | 1-2 分钟 | <1 分钟 | 1-2 分钟 | 2-3 分钟 | 10-15 分钟 | **~18-26 分钟** |
-| 30 分钟 | 6-10 分钟 | 2-3 分钟 | <1 分钟 | 3-5 分钟 | 3-5 分钟 | 10-15 分钟 | **~25-40 分钟** |
-| 60 分钟 | 15-20 分钟 | 3-5 分钟 | <1 分钟 | 4-6 分钟 | 3-5 分钟 | 10-15 分钟 | **~38-53 分钟** |
-
-步骤 1 用本地模型（离线，不收费）；步骤 2 通过 Codex CLI；步骤 4-6 通过 Claude Code CLI 调用 Fable 5。
+不要徒手写频道标题——徒手写绕过了高播标题的外部基准。
 
 ---
 
@@ -183,44 +154,50 @@ venv/bin/python tools/generate_titles.py /path/to/视频名.article.md -o /path/
 
 | 文件 | 说明 |
 |------|------|
-| `guideline_kedaibiao.md` | 频道 Guideline：受众定位、标题策略、高光选取原则、封面设计逻辑 |
-| `top_titles.txt` | 频道 Top 25 真实高播标题，Round 1 评审的外部基准 |
-| `channel_vocab.json` | 频道词汇表（人名、品牌名、技术术语），注入 ASR 热词 |
-| `correction_candidates.json` | 高置信度替换规则（数字格式等），规则层直接执行 |
-
----
+| `guideline_kedaibiao.md` | 频道 Guideline：受众定位、标题策略、高光选取原则 |
+| `top_titles.txt` | 频道 Top 25 真实高播标题，标题评审的外部基准（发布后高播标题持续回流） |
+| `channel_vocab.json` | 频道词汇表，注入 ASR 热词。**只收多期复用的术语**，单期实体走 `--seeds` |
+| `correction_candidates.json` | 高置信度替换规则，规则层直接执行 |
 
 ## 工具说明
 
 | 脚本 | 功能 |
 |------|------|
-| `tools/process_video.py` | 主入口，6步流程一体化 |
-| `tools/codex_cli.py` | 文件响应模式 Codex CLI 工具（字幕校对） |
-| `tools/claude_cli.py` | 文件响应模式 Claude CLI 工具（高光、文章、标题） |
-| `tools/correct/correct_srt.py` | 字幕校对引擎（可单独调用） |
-| `tools/resplit_srt.py` | 断句工具（可单独调用） |
-| `tools/generate_article.py` | 文章生成（可单独调用） |
-| `tools/generate_highlights.py` | 高光提取（可单独调用） |
+| `tools/process_video.py` | 主入口，六步一体 |
+| `tools/claude_cli.py` | Claude CLI 文件响应封装，内置 → Codex gpt-5.5 降级 |
+| `tools/codex_cli.py` | Codex CLI 文件响应封装 |
+| `tools/correct/correct_srt.py` | 精校引擎：同音字 + 实体一致性 + 全文覆盖（可单独调用） |
+| `tools/resplit_srt.py` | 断句：合并窗口 + jieba 词边界（可单独调用） |
+| `tools/generate_highlights.py` | 高光提取，自动判型单口/访谈（可单独调用） |
+| `tools/generate_article.py` | 文章生成，按判型分流、自动吃高光（可单独调用） |
 | `tools/generate_titles.py` | 标题三轮工作流（可单独调用） |
 
----
+## 时间参考
+
+| 视频时长 | 转录 | 精校 | 断句 | 高光 | 文章 | 标题 | **合计** |
+|---------|------|------|------|------|------|------|---------|
+| 10 分钟 | 2-3 分钟 | 1-2 分钟 | <1 分钟 | 2-3 分钟 | 1-2 分钟 | 8-15 分钟 | **~15-25 分钟** |
+| 30 分钟 | 6-10 分钟 | 2-3 分钟 | <1 分钟 | 3-5 分钟 | 3-5 分钟 | 8-15 分钟 | **~25-40 分钟** |
+| 110 分钟 | ~30 分钟 | 3-5 分钟 | <1 分钟 | 2-4 分钟 | 3-5 分钟 | 8-15 分钟 | **~50-60 分钟** |
+
+（110 分钟一行是 2026-06-11 徐老师访谈的实测：转录 1768s、精校 187s、高光 151s、文章 196s、标题 474s。）
 
 ## 常见问题
 
-**Q：运行时报 `未安装 mlx-qwen3-asr`？**  
-A：确认用的是 `venv/bin/python`，而不是系统自带的 `python3`。如果确认无误还是报错，手动安装：`venv/bin/pip install mlx-qwen3-asr`。
+**Q：运行时报 `未安装 mlx-qwen3-asr`？**
+A：确认用的是 `venv/bin/python`，不是系统 `python3`。仍报错则 `venv/bin/pip install mlx-qwen3-asr`。
 
-**Q：AI 步骤报错 `codex: command not found` 或 `claude: command not found`？**  
-A：对应 CLI 未安装或未在 PATH 中。运行 `which codex` / `which claude` 确认。
+**Q：AI 步骤报 `codex: command not found` / `claude: command not found`？**
+A：对应 CLI 未安装或不在 PATH。`which codex` / `which claude` 确认。
 
-**Q：高光分析选错了角度？**  
-A：在 SRT 文件末尾手动追加高光字幕（见上方「高光检测逻辑」），系统会优先使用编辑者亲选的片段。
+**Q：高光选错了角度？**
+A：在 `.final.srt` 末尾手动追加亲选高光字幕（见「高光检测」），脚本会优先采用。
 
-**Q：嘉宾名转录还是错了？**  
-A：`--seeds` 里的名字必须是书面正确写法（如「刘嘉」而非「刘佳」）。校对阶段会在全文中查找并报告该名字的出现次数，如果提示「未找到」，说明 Qwen 转录用了另一个写法，需手动查找修改。
+**Q：嘉宾名转录还是错了？**
+A：`--seeds` 用书面正确写法。精校阶段会报告每个 seed 的全文出现次数，提示「未找到」说明 ASR 用了别的写法——精校的实体一致性扫描会尝试统一，仍漏的手动改 `.corrected.srt` 后重跑断句。
 
-**Q：`.final.srt` 断句位置不对？**  
-A：调整 `--max-chars` 参数（默认 20 字），或在剪辑软件里手动微调。
+**Q：`.final.srt` 断句不对？**
+A：调 `--max-chars`（默认 20），或在剪辑软件里微调。
 
-**Q：标题生成卡住不动？**  
-A：步骤 5-6 调用 Claude Code CLI，需已登录。运行 `claude -p "test"` 确认可正常调用。
+**Q：标题生成卡住？**
+A：确认 Claude Code CLI 已登录（`claude -p "test"`）。Fable 5 不可用时会自动降级 Codex gpt-5.5，输出里有 ⚠ 提示。
