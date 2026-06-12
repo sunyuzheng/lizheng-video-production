@@ -268,7 +268,11 @@ def _merge_windows(chunks: list[dict]) -> list[dict]:
 
         if cur is not None:
             gap = t_start - cur["end"]
-            if gap > MERGE_MAX_GAP or len(cur["text"]) + n > MERGE_MAX_CHARS:
+            if (
+                gap > MERGE_MAX_GAP
+                or gap < -MERGE_MAX_GAP
+                or len(cur["text"]) + n > MERGE_MAX_CHARS
+            ):
                 close()
 
         if cur is None:

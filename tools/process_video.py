@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-process_video.py v4 — 视频转录 + 字幕校对 + 高光 + 文章 + 标题一体化入口
+process_video.py v4 — 视频转录 + 字幕校对 + 高光 + 文章 + 标题 + YouTube description 一体化入口
 
-六步流程：
+七步流程：
   1. Qwen3-ASR 转录
   2. Codex 字幕校对
   3. 断句处理
   4. 提取视频高光片段（扫描全片选 3-5 个高光，供标题锚定）
   5. 生成频道风格文章
   6. 生成播客标题（高光驱动，三轮 Claude Fable 5 工作流）
+  7. 生成 YouTube description（介绍 + 章节）
 
 用法：
   python3 tools/process_video.py video.mp4
@@ -250,8 +251,23 @@ def titles(content_path: Path, output_dir: Path, workspace_dir: Path, stem: str)
         return None
 
 
+def youtube_description(final_srt: Path, output_dir: Path, stem: str) -> Path | None:
+    sys.path.insert(0, str(_TOOLS))
+    from generate_youtube_description import generate_youtube_description
+    t0 = time.time()
+    print(f"  生成 YouTube description…", flush=True)
+    try:
+        result = generate_youtube_description(final_srt, output_dir=output_dir, stem=stem)
+        elapsed = time.time() - t0
+        print(f"  ✓ YouTube description 完成  {elapsed:.0f}s  → {result.name}")
+        return result
+    except Exception as e:
+        print(f"  ✗ YouTube description 生成失败: {e}")
+        return None
+
+
 def main():
-    parser = argparse.ArgumentParser(description="视频转录 + 字幕校对 + 高光 + 文章 + 标题 v4")
+    parser = argparse.ArgumentParser(description="视频转录 + 字幕校对 + 高光 + 文章 + 标题 + YouTube description v4")
     parser.add_argument("video", help="视频文件路径")
     parser.add_argument("--skip-transcribe", action="store_true")
     parser.add_argument("--skip-correct", action="store_true")
@@ -261,6 +277,8 @@ def main():
                         help="跳过高光提取")
     parser.add_argument("--skip-titles", action="store_true",
                         help="跳过标题生成")
+    parser.add_argument("--skip-youtube-description", action="store_true",
+                        help="跳过 YouTube description 生成")
     parser.add_argument("--seeds", nargs="*", default=None,
                         help="本期嘉宾/术语（跳过交互式询问）")
     parser.add_argument("--no-seeds", action="store_true",
@@ -295,7 +313,7 @@ def main():
     correction_model = args.model or "Codex CLI 默认配置"
     print(f"校对引擎: Codex CLI ({correction_model})")
     print(f"高光/文章/标题模型: {CLAUDE_CONTENT_MODEL}")
-    print(f"流程: 转录 → 校对 → 断句 → 高光 → 文章 → 标题")
+    print(f"流程: 转录 → 校对 → 断句 → 高光 → 文章 → 标题 → YouTube description")
     print(f"{'='*55}")
 
     # ── 决定 episode_seeds ───────────────────────────────────────────────────
@@ -312,7 +330,7 @@ def main():
 
     # ── 1. 转录 ───────────────────────────────────────────────────────────────
     if not args.skip_transcribe:
-        print("\n[1/6] Qwen3-ASR 转录")
+        print("\n[1/7] Qwen3-ASR 转录")
         channel_ctx = load_channel_context()
         context = build_transcribe_context(channel_ctx, episode_seeds)
         qwen_srt = transcribe(video_path, output_dir=process_dir, context=context)
@@ -334,17 +352,17 @@ def main():
                         break
             if fallback:
                 qwen_srt = fallback
-                print(f"\n[1/6] 转录 (已跳过，无 qwen，后续使用 {qwen_srt.name})")
+                print(f"\n[1/7] 转录 (已跳过，无 qwen，后续使用 {qwen_srt.name})")
             else:
                 print(f"错误: --skip-transcribe 但找不到 {qwen_srt.name}")
                 sys.exit(1)
         else:
-            print(f"\n[1/6] 转录 (已跳过) → {qwen_srt.name}")
+            print(f"\n[1/7] 转录 (已跳过) → {qwen_srt.name}")
 
     # ── 2. 校对 ───────────────────────────────────────────────────────────────
     corrected_srt = None
     if not args.skip_correct:
-        print("\n[2/6] Codex 字幕校对 + 全文扫描")
+        print("\n[2/7] Codex 字幕校对 + 全文扫描")
         corrected_srt = correct(qwen_srt, episode_seeds, model=args.model)
     else:
         corrected_srt = process_dir / f"{stem}.corrected.srt"
@@ -353,10 +371,10 @@ def main():
             corrected_srt = legacy_corrected
         if not corrected_srt.exists():
             corrected_srt = None
-        print(f"\n[2/6] 校对 (已跳过)")
+        print(f"\n[2/7] 校对 (已跳过)")
 
     # ── 3. 断句 ───────────────────────────────────────────────────────────────
-    print(f"\n[3/6] 断句处理")
+    print(f"\n[3/7] 断句处理")
     final_srt = None
     final_path = delivery_dir / f"{stem}.final.srt"
     if corrected_srt and corrected_srt.exists():
@@ -378,7 +396,7 @@ def main():
     # ── 4. 提取高光 ───────────────────────────────────────────────────────────
     highlights_path = None
     if not args.skip_highlights:
-        print(f"\n[4/6] 提取视频高光片段")
+        print(f"\n[4/7] 提取视频高光片段")
         src = final_srt or corrected_srt or qwen_srt
         if src and src.exists():
             highlights_path = highlights(src, output_dir=delivery_dir, stem=stem)
@@ -388,12 +406,12 @@ def main():
         candidate = delivery_dir / f"{stem}.highlights.md"
         if candidate.exists():
             highlights_path = candidate
-        print(f"\n[4/6] 高光提取 (已跳过)")
+        print(f"\n[4/7] 高光提取 (已跳过)")
 
     # ── 5. 生成文章 ───────────────────────────────────────────────────────────
     article_path = None
     if not args.skip_article:
-        print(f"\n[5/6] 生成频道风格文章")
+        print(f"\n[5/7] 生成频道风格文章")
         src = final_srt or corrected_srt or qwen_srt
         if src and src.exists():
             article_path = article(src, output_dir=delivery_dir, stem=stem)
@@ -403,11 +421,11 @@ def main():
         candidate = delivery_dir / f"{stem}.article.md"
         if candidate.exists():
             article_path = candidate
-        print(f"\n[5/6] 文章生成 (已跳过)")
+        print(f"\n[5/7] 文章生成 (已跳过)")
 
     # ── 6. 生成标题 ───────────────────────────────────────────────────────────
     if not args.skip_titles:
-        print(f"\n[6/6] 生成播客标题（高光驱动）")
+        print(f"\n[6/7] 生成播客标题（高光驱动）")
         # 优先用 article，其次 final_srt — highlights 会通过文件名自动检测
         src = article_path or final_srt or corrected_srt or qwen_srt
         if src and src.exists():
@@ -415,11 +433,22 @@ def main():
         else:
             print("  (无可用来源，跳过)")
     else:
-        print(f"\n[6/6] 标题生成 (已跳过)")
+        print(f"\n[6/7] 标题生成 (已跳过)")
+
+    # ── 7. 生成 YouTube description ──────────────────────────────────────────
+    if not args.skip_youtube_description:
+        print(f"\n[7/7] 生成 YouTube description")
+        src = final_srt or corrected_srt or qwen_srt
+        if src and src.exists():
+            youtube_description(src, output_dir=delivery_dir, stem=stem)
+        else:
+            print("  (无可用 SRT，跳过)")
+    else:
+        print(f"\n[7/7] YouTube description 生成 (已跳过)")
 
     print(f"\n{'='*55}")
     print("交付文件：")
-    for suf in [".final.srt", ".highlights.md", ".article.md", ".titles.md"]:
+    for suf in [".final.srt", ".highlights.md", ".article.md", ".titles.md", ".youtube-description.txt"]:
         p = delivery_dir / f"{stem}{suf}"
         print(f"  {'✓' if p.exists() else '✗'} {p.name}")
     print("过程文件：")
