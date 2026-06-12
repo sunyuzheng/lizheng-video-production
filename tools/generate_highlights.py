@@ -121,24 +121,25 @@ def extract_appended_highlights(srt_path: Path) -> str:
     content = srt_path.read_text(encoding="utf-8")
     lines = content.splitlines()
 
-    # 找最后一段 00:00:xx 时间戳出现的位置
-    # 策略：找到 SRT 中最后一个 00:00 开头的时间戳行
-    last_00_pos = -1
+    appended_start = -1
+    seen_main_content = False
     for i, line in enumerate(lines):
-        if re.match(r"^00:00:\d{2}[,\.]\d{3}\s*-->", line.strip()):
-            last_00_pos = i
+        start_seconds = _parse_start_seconds(line)
+        if start_seconds is None:
+            continue
+        if start_seconds >= 60:
+            seen_main_content = True
+            continue
+        if seen_main_content and i >= len(lines) * 0.3:
+            appended_start = i
+            break
 
-    if last_00_pos == -1:
-        return ""
-
-    # 验证：这个 00:00 块出现在主内容（>00:01:xx）之后
-    # 如果文件前 10% 就有 00:00 块，那可能就是正常的视频开头，不是追加的高光
-    if last_00_pos < len(lines) * 0.3:
+    if appended_start == -1:
         return ""
 
     # 提取从该位置开始的所有文本
     texts = []
-    for line in lines[last_00_pos:]:
+    for line in lines[appended_start:]:
         line = line.strip()
         if not line:
             continue
