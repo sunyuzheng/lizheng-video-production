@@ -1,11 +1,11 @@
 ---
 name: kdb-video-post-production
-description: 给定视频、音频或已有字幕，完成本地转写、字幕精校、断句，并按视频类型（单口/访谈）分流产出：高光选取、文章（单口外发稿或访谈伴读稿）、标题（频道多轮标题，或经 xhs-cover-title 产出小红书封面+标题）、YouTube description、访谈封面图。转写用 mlx-qwen3-asr 1.7B，精校用 Codex CLI，内容生成用 Claude Code Fable 5，不可用时降级 Codex gpt-5.5。
+description: 给定视频、音频或已有字幕，完成本地转写、字幕精校、断句，并按视频类型（单口/访谈）分流产出：高光选取、文章（单口外发稿或访谈伴读稿）、标题（频道多轮标题，或经 xhs-cover-title 产出小红书封面+标题）、YouTube description、访谈封面图；需要嘉宾审阅或团队交接时，可追加分 tab Google Doc。转写用 mlx-qwen3-asr 1.7B，精校用 Codex CLI，内容生成用 Claude Code Fable 5，不可用时降级 Codex gpt-5.5。
 ---
 
 # KDB 视频后期生产 v2
 
-一段原始录制 → 五类资产：**①精校字幕 ②高光 ③文章 ④标题 ⑤YouTube description**（+ 访谈封面图一个可选件；访谈可加说话人标注层）。
+一段原始录制 → 五类资产：**①精校字幕 ②高光 ③文章 ④标题 ⑤YouTube description**（+ 访谈封面图、说话人标注、嘉宾审阅 Google Doc 等可选件）。
 
 两条铁律贯穿全程：
 - **确定性优先**：有脚本的环节跑脚本，agent 只做判型、路由、把关和脚本兜不住的部分，不徒手重做脚本已覆盖的工作。
@@ -169,6 +169,25 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md
 - 章节数不要太多，宁可 8-10 个关键节点，也不要逐小节铺满。
 - 时间戳必须根据 `.final.srt` 的真实时间判断，不能编。
 
+## 第 7 步：Google Doc 交付（可选）
+
+当用户需要给嘉宾审阅、给团队交接，或把本期核心产物集中到一个协作文档里，使用 Google Drive/Docs connector 创建一个 tabbed Google Doc。这个步骤不是 `process_video.py` 自动产物，由 agent 在内容生成后执行。
+
+推荐 tabs：
+- `嘉宾预览`：整期主线、给嘉宾看的重点摘要、需要嘉宾确认的问题。
+- `正片伴读文章`：事实和归因检查后的 `.article.md` 整理版。
+- `高光剪辑地图`：`.highlights.md` 的候选片段、vantage point、剪辑组合。
+- `标题封面`：`.titles.md` + `.xhs.md` 的标题、封面文案、投放建议。
+- `发布文案`：`.youtube-description.txt` + 平台简介备选。
+- `归因与制作说明`：speaker map、QC、pipeline 说明、GitHub 状态。
+
+规则：
+- 给嘉宾看的 tabs 必须先做事实和归因 QC；公司名、职位、第一人称归属要二次检查。
+- 如果有 `.speaker_labeled.md`，嘉宾可见内容优先基于它；`UNKNOWN` / `MIXED` 不强行归因。
+- 不把内部 QC、声纹分数、本地路径、GitHub commit 混进 `嘉宾预览`。
+- Google Doc 里不要保留 Markdown 控制符，例如 `**标题**`；用 Google Docs 样式或纯文本。
+- 如果 Google Docs tabs API 不可用，降级为单文档内同名一级标题分区，并向用户说明。
+
 ## 交付物
 
 | 文件 | 何时生成 | 由谁生成 |
@@ -185,6 +204,7 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md
 | `<video>.cover-16x9.png` / `<video>.cover.png` | 访谈发布默认 | 截图/设计或 imagegen |
 | `<video>.cover-3x4.png` | 小红书发布默认 | 截图/设计或 imagegen |
 | `<video>.cover-4x3.png` | B站/抖音/视频号发布默认 | 截图/设计或 imagegen |
+| Google Doc URL | 嘉宾审阅 / 团队交接时 | Google Drive/Docs connector |
 
 不为形式完整强行生成用户没要的产物；用户明确说不要标题，就不生成 `.titles.md`。
 
@@ -199,6 +219,7 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md
 - `.xhs.md` 通过 xhs-cover-title 自带的自检清单（≤20 字、零 emoji、封面标题不重复等）。
 - `.youtube-description.txt` 可直接复制到 YouTube：介绍平实、有钩子；章节从 `00:00` 开始；时间戳为 `mm:ss` 且对应字幕真实段落。
 - 封面图三比例齐全：16:9、3:4、4:3；默认带字；人物不被裁掉；文字不压脸、不出界；已保存到视频同目录。
+- 如生成 Google Doc：嘉宾可见内容与内部制作说明分 tab；无 raw Markdown 控制符；敏感事实、公司归属和 speaker attribution 已二次检查。
 - 不泄露 token、cookie 或私有数据。
 
 ## 持续校准

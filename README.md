@@ -1,6 +1,6 @@
 # 课代表立正 · 视频后期生产（kdb-video-post-production）
 
-一段原始录制 → 五类内容资产：**精校字幕、高光、文章、标题、YouTube description**。本仓库同时包含 **skill**（工作流定义）和**实现**（流水线代码），2026-06-12 起合并为单一仓库，skill 和代码在同一个 commit 里同步演化。
+一段原始录制 → 五类内容资产：**精校字幕、高光、文章、标题、YouTube description**；访谈还可追加 **speaker attribution、封面图、嘉宾审阅 Google Doc**。本仓库同时包含 **skill**（工作流定义）和**实现**（流水线代码），2026-06-12 起合并为单一仓库，skill 和代码在同一个 commit 里同步演化。
 
 ```
 .
@@ -29,6 +29,7 @@
 | 6. 文章 | 按判型分流；自动读取高光做跳转地图；禁元叙述和空转总结 | `.article.md` | Claude Code CLI |
 | 7. 标题 | 三轮工作流，以频道真实高播标题为外部基准；终审置顶、无内部代号 | `.titles.md` | Claude Code CLI |
 | 8. YouTube description | 平实介绍 + 可复制的 mm:ss 章节，从 00:00 开始 | `.youtube-description.txt` | Claude Code CLI |
+| 9. Google Doc 交付（可选） | 把嘉宾可看内容、文章、高光、标题封面、发布文案、归因说明分 tab 整合 | Google Doc URL | Google Drive/Docs connector |
 
 **标题有两条路线**：上表第 7 步是路线 A（B站/YouTube 频道长标题）；路线 B 是小红书封面+标题，由 Claude Code 调用独立的 [`xhs-cover-title`](https://github.com/sunyuzheng) skill 产出 `.xhs.md`（封面文案 + ≤20 字标题，喂料用 seeds 身份信息和高光原话），不在本仓库脚本内。
 
@@ -148,6 +149,29 @@ venv-diarization/bin/python tools/speaker_attribution.py \
 
 原则：ASR 字幕仍是「说了什么」的真值；diarization 只负责「谁在说」。后续访谈文章/高光会自动优先读取同目录的 `.speaker_labeled.md` 或 `.speaker_labeled.srt`，避免把主持人判断写成嘉宾判断。低置信 cue 会标成 `UNKNOWN` 或 `MIXED`，下游不得强行归因。
 
+### Google Doc 交付（可选）
+
+当需要给嘉宾审阅、给团队交接，或把一次后期的核心产物集中成一个可协作文件时，用 Google Drive/Docs connector 创建一个 tabbed Google Doc。它不是 `process_video.py` 自动产物；由 agent 在内容生成后执行。
+
+推荐 tab 结构：
+
+| Tab | 内容 | 可见性 |
+|-----|------|--------|
+| `嘉宾预览` | 给嘉宾看的整期主线、重点摘要、需要确认的问题 | 可直接发嘉宾 |
+| `正片伴读文章` | 经过事实和归因检查的 `.article.md` 整理版 | 可直接发嘉宾 |
+| `高光剪辑地图` | `.highlights.md` 的候选片段、vantage point、推荐组合 | 内部为主 |
+| `标题封面` | `.titles.md` + `.xhs.md` 的主推标题、封面文案、投放建议 | 内部为主 |
+| `发布文案` | `.youtube-description.txt` + 短视频简介备选 | 内部为主 |
+| `归因与制作说明` | speaker map、QC 结论、pipeline 说明、GitHub 状态 | 内部，不建议直接发嘉宾 |
+
+写入规则：
+
+- 给嘉宾看的 tab 必须先做事实和归因 QC；公司名、职位、第一人称归属要人工或 LLM 二次检查。
+- 如果有 `.speaker_labeled.md`，嘉宾可见内容优先基于它；`UNKNOWN` / `MIXED` 不写成某个人的观点。
+- Google Doc 里不要保留 Markdown 控制符（如 `**标题**`）；标题用 Google Docs 样式或纯文本。
+- 内部 QC、声纹分数、本地路径、GitHub commit 放到 `归因与制作说明`，不要混入嘉宾预览。
+- 如果 Google Docs tabs API 不可用，降级为单文档内同名一级标题分区，并在交付时说明。
+
 ### 所有参数
 
 | 参数 | 说明 |
@@ -182,6 +206,7 @@ venv-diarization/bin/python tools/speaker_attribution.py \
 | `视频名.cover-16x9.png` / `视频名.cover.png` | 16:9 带字封面图 | YouTube / 旧流程主封面 |
 | `视频名.cover-3x4.png` | 3:4 带字封面图，推荐两张截图上下叠放，中间放字 | 小红书 |
 | `视频名.cover-4x3.png` | 4:3 带字封面图 | B站 / 抖音 / 视频号 |
+| Google Doc URL | 分 tab 汇总嘉宾预览、文章、高光、标题封面、发布文案、归因说明 | 嘉宾审阅 / 团队交接 |
 
 **工作区** = `视频名_process/`：`*.qwen.srt`（原始转录，永不覆盖）、`*.corrected.srt`（精校稿）、`*_title_ws/`（标题轮次中间文件）。过程文件不当交付。
 
