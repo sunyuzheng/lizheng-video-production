@@ -246,10 +246,23 @@ HIGHLIGHTS_FROM_SCAN = """\
 
 def _episode_stem(path: Path) -> str:
     stem = path.with_suffix("").stem
-    for suffix in (".final", ".corrected", ".qwen", ".article"):
+    for suffix in (".speaker_labeled", ".final", ".corrected", ".qwen", ".article"):
         if stem.endswith(suffix):
             return stem[: -len(suffix)]
     return stem
+
+
+def _read_speaker_labeled(content_path: Path, output_dir: Path, episode_stem: str) -> str:
+    candidates = [
+        output_dir / f"{episode_stem}.speaker_labeled.md",
+        output_dir / f"{episode_stem}.speaker_labeled.srt",
+        content_path.parent / f"{episode_stem}.speaker_labeled.md",
+        content_path.parent / f"{episode_stem}.speaker_labeled.srt",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.read_text(encoding="utf-8")
+    return ""
 
 
 def generate_highlights(
@@ -262,13 +275,21 @@ def generate_highlights(
     out_dir.mkdir(parents=True, exist_ok=True)
     output_path = out_dir / f"{episode_stem}.highlights.md"
 
-    # 读取内容
+    # 读取内容。访谈如果有 speaker_labeled.md/srt，优先用它做归因参考。
+    speaker_labeled = _read_speaker_labeled(srt_path, out_dir, episode_stem)
     if srt_path.suffix == ".md":
         full_text = srt_path.read_text(encoding="utf-8")
         actual_highlights = ""
     else:
         full_text = srt_to_timed_text(srt_path)
         actual_highlights = extract_appended_highlights(srt_path)
+    if speaker_labeled:
+        full_text = (
+            "【说话人标注稿，访谈归因优先信源】\n"
+            "只有明确标成嘉宾/主持人的内容，才可以写成「嘉宾说 / 主持人说」。"
+            "UNKNOWN 或 MIXED 段落不得强行归因。\n\n"
+            + speaker_labeled
+        )
 
     guideline = load_guideline()
 

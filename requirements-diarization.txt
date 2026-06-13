@@ -1,0 +1,4 @@
+torch>=2.4
+torchaudio>=2.4
+pyannote.audio>=4.0
+numpy>=1.26

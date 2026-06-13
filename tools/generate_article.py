@@ -193,7 +193,7 @@ def srt_to_timed_text(srt_path: Path, window_seconds: int = 60) -> str:
 
 def _episode_stem(path: Path) -> str:
     stem = path.with_suffix("").stem
-    for suffix in (".final", ".corrected", ".qwen"):
+    for suffix in (".speaker_labeled", ".final", ".corrected", ".qwen"):
         if stem.endswith(suffix):
             return stem[: -len(suffix)]
     return stem
@@ -203,6 +203,19 @@ def _read_highlights(srt_path: Path, output_dir: Path, episode_stem: str) -> str
     candidates = [
         output_dir / f"{episode_stem}.highlights.md",
         srt_path.parent / f"{episode_stem}.highlights.md",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.read_text(encoding="utf-8")
+    return ""
+
+
+def _read_speaker_labeled(srt_path: Path, output_dir: Path, episode_stem: str) -> str:
+    candidates = [
+        output_dir / f"{episode_stem}.speaker_labeled.md",
+        output_dir / f"{episode_stem}.speaker_labeled.srt",
+        srt_path.parent / f"{episode_stem}.speaker_labeled.md",
+        srt_path.parent / f"{episode_stem}.speaker_labeled.srt",
     ]
     for candidate in candidates:
         if candidate.exists():
@@ -222,11 +235,13 @@ def generate_article(
     episode_stem = stem or _episode_stem(srt_path)
     output_path = out_dir / f"{episode_stem}.article.md"
 
-    # 提取带粗时间戳的文本，避免长访谈文章失去视频伴读功能。
-    text = srt_to_timed_text(srt_path)
+    highlights = _read_highlights(srt_path, out_dir, episode_stem)
+    speaker_labeled = _read_speaker_labeled(srt_path, out_dir, episode_stem)
+    # 访谈如果有说话人标注稿，直接把它作为主逐字稿，避免重复塞入两份长 transcript。
+    text = speaker_labeled if speaker_labeled else srt_to_timed_text(srt_path)
     if max_chars > 0 and len(text) > max_chars:
         text = text[:max_chars] + "…（已截断）"
-    highlights = _read_highlights(srt_path, out_dir, episode_stem)
+    transcript_label = "本期说话人标注逐字稿" if speaker_labeled else "本期逐字稿"
 
     # 构造 prompt
     prompt = (
@@ -240,7 +255,12 @@ def generate_article(
             if highlights
             else "\n\n本期没有提供 highlights.md，请直接从逐字稿中判断主线和高光。"
         )
-        + "\n\n以下是本期逐字稿：\n\n---\n"
+        + (
+            "\n\n以下逐字稿已经带说话人标注。访谈归因以 speaker label 为准：只有明确标成嘉宾/主持人的内容，才可以写成「嘉宾说 / 我问」。UNKNOWN 或 MIXED 段落不得强行归因。"
+            if speaker_labeled
+            else ""
+        )
+        + f"\n\n以下是{transcript_label}：\n\n---\n"
         + text
         + "\n---"
     )
