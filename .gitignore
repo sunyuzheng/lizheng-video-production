@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 .Python
 venv/
+venv-diarization/
 env/
 .venv/
 
@@ -25,11 +26,17 @@ env/
 *.qwen.srt
 *.corrected.srt
 *.final.srt
+*.speaker_labeled.srt
+*.diarization.rttm
+*.speaker_turns.json
+*.speaker_map.json
+*.speaker_qc.md
 
 # 生成的内容文件（本地产物）
 *.article.md
 *.highlights.md
 *.titles.md
+*.speaker_labeled.md
 *_title_ws/
 
 # 运行时数据（不纳入版本管理）
