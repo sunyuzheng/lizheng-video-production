@@ -1,4 +1,4 @@
-# 课代表立正 · 视频后期生产（kdb-video-post-production）
+# 课代表立正 · 视频后期生产（lizheng-video-production）
 
 一段原始录制 → 五类内容资产：**精校字幕、高光、文章、标题、YouTube description**；访谈还可追加 **speaker attribution、封面图、嘉宾审阅 Google Doc**。本仓库同时包含 **skill**（工作流定义）和**实现**（流水线代码），2026-06-12 起合并为单一仓库，skill 和代码在同一个 commit 里同步演化。
 
@@ -11,7 +11,7 @@
 └── README.md             ← 本文件：仓库代码怎么跑
 ```
 
-**Skill 加载方式**：`~/.claude/skills/kdb-video-post-production` → `/Users/sunyuzheng/Desktop/AI/skills/kdb-video-post-production` → 本仓库 `skill/`（两级符号链接）。改 skill 只改 `skill/SKILL.md`，立即生效。
+**Skill 加载方式**：当前为兼容旧 skill 名，仍使用 `~/.claude/skills/kdb-video-post-production` → `/Users/sunyuzheng/Desktop/AI/skills/kdb-video-post-production` → 本仓库 `skill/`（两级符号链接）。改 skill 只改 `skill/SKILL.md`，立即生效。
 
 ---
 
@@ -54,8 +54,8 @@
 ## 一次性安装
 
 ```bash
-git clone https://github.com/sunyuzheng/kdb-video-post-production.git
-cd kdb-video-post-production
+git clone https://github.com/sunyuzheng/lizheng-video-production.git
+cd lizheng-video-production
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 ```
@@ -67,7 +67,7 @@ venv/bin/pip install -r requirements.txt
 说话人标注是访谈的可选增强层，不是主流程依赖。它单独使用 Python 3.11 环境，避免影响主 ASR 流程：
 
 ```bash
-cd kdb-video-post-production
+cd lizheng-video-production
 /opt/homebrew/bin/python3.11 -m venv venv-diarization
 venv-diarization/bin/pip install -r requirements-diarization.txt
 ```
