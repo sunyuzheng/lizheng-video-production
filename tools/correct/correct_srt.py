@@ -19,6 +19,7 @@ correct_srt.py v4 — 候选词驱动校对引擎（Codex CLI 文件响应模式
 
 import json
 import re
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -51,6 +52,28 @@ _FORMAT_RULES: list[dict] = [
 _BOUNDARY_PRECEDING = set("一二三四五六七八九十")
 _FORMAT_PAT_SET = {r["pat"] for r in _FORMAT_RULES}
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+# ── 前置检查：codex 必须可用 ──────────────────────────────────────────────────
+
+class CodexUnavailableError(RuntimeError):
+    """codex CLI 不在 PATH 上。校对必须硬失败，不能静默产出与输入相同的字幕。"""
+
+
+def ensure_codex_available() -> str:
+    """
+    入口前置检查。校对这一步不做引擎降级：换模型会无声改变校对质量和风格，
+    跳过则会把未精校字幕当作已精校，后续断句/高光/文章/标题全部受影响。
+    """
+    codex = shutil.which("codex")
+    if not codex:
+        raise CodexUnavailableError(
+            "未找到 codex CLI —— 字幕精校无法运行。\n"
+            "  修复：brew reinstall --cask codex\n"
+            "  确认：which codex && codex --version && codex login status\n"
+            "  确实要跳过校对时，显式使用 process_video.py --skip-correct。"
+        )
+    return codex
 
 
 def load_vocab() -> dict:
@@ -259,10 +282,14 @@ def call_codex_for_corrections(
     flags: list[dict],
     model: str | None = DEFAULT_CODEX_MODEL,
     timeout: int = 300,
-) -> list[dict]:
+) -> tuple[Any, int]:
     """
     文件响应模式：将全文 SRT + 候选词提示写入临时文件，
     让 Codex 将 JSON 修正数组写入另一临时文件，Python 读取并返回。
+
+    Returns:
+        (parsed, api_errors)。调用失败时返回 ([], 1) 并打印真实原因——
+        失败不能伪装成「没有需要修正的内容」，那会让上游看到 corrections=0 而误判成功。
     """
     prompt = build_correction_prompt(chunks, flags)
 
@@ -276,9 +303,10 @@ def call_codex_for_corrections(
     try:
         call_codex_file_based(prompt, corrections_file, model=model, timeout=timeout, cwd=_REPO_ROOT)
         raw = corrections_file.read_text(encoding="utf-8").strip()
-        return parse_llm_response(raw)
-    except Exception:
-        return []
+        return parse_llm_response(raw), 0
+    except Exception as e:
+        print(f"  ✗ Codex 调用失败: {type(e).__name__}: {str(e)[:300]}", flush=True)
+        return [], 1
     finally:
         corrections_file.unlink(missing_ok=True)
 
@@ -434,6 +462,35 @@ def validate_corrections(parsed: Any, chunk_texts: list[str], flags: list[dict])
     return corrections
 
 
+def merge_corrections(
+    strict: list[dict], loose: list[dict], chunk_texts: list[str]
+) -> list[dict]:
+    """
+    v4 把候选词扫描和全文扫描合并成了单次 Codex 调用，所以两个验证器都必须生效：
+    - validate_corrections：已知易混词，带 _extract_minimal 收窄
+    - validate_corrections_full_scan：本期新出现的人名/品牌/实体
+
+    只跑前者会把后者的结果全部丢掉——candidates 没命中时 flag_patterns 为空集，
+    每一条修正都会被 `orig not in flag_patterns` 挡下，最终恒为 corrections=0。
+    """
+    merged: list[dict] = []
+    seen: set = set()
+    for group in (strict, loose):
+        for c in group:
+            if c["original"] in seen:
+                continue
+            seen.add(c["original"])
+            merged.append(c)
+
+    # 两个验证器各自限过改动量，合并后再统一兜一次
+    full_text = "\n".join(chunk_texts)
+    total_chars = max(len(full_text), 1)
+    total_changed = sum(len(c["original"]) for c in merged)
+    if total_changed > total_chars * MAX_EDIT_RATIO:
+        merged = sorted(merged, key=lambda x: len(x["original"]))[:5]
+    return merged
+
+
 def apply_corrections(chunks: list[dict], corrections: list[dict]) -> list[dict]:
     result = [dict(c) for c in chunks]
     for corr in corrections:
@@ -563,6 +620,7 @@ def correct_file(
     episode_seeds: list[str] | None = None,
     model: str | None = DEFAULT_CODEX_MODEL,
     verbose: bool = False,
+    stats: dict | None = None,
 ) -> Path | None:
     """
     对单个 .qwen.srt 文件进行校对，生成 .corrected.srt。
@@ -572,7 +630,14 @@ def correct_file(
         episode_seeds: 本期嘉宾名、品牌名等（如 ["刘嘉", "Superlinear Academy"]）
         model: Codex 模型；None 表示使用 Codex CLI 默认配置
         verbose: 是否打印详细日志
+        stats: 传入一个 dict 则写入本次统计（fmt/flags/corrections/api_errors），
+               供上游做质量门判断——corrections 指 LLM 修正数，不含规则层的 fmt
+
+    Raises:
+        CodexUnavailableError: codex CLI 不在 PATH 上（此时不写任何输出文件）
     """
+    ensure_codex_available()
+
     if not qwen_path.exists():
         print(f"  错误：找不到 {qwen_path}")
         return None
@@ -600,12 +665,29 @@ def correct_file(
     all_flags = scan_flags(chunks, candidates)
     total_flags = len(all_flags)
 
-    parsed = call_codex_for_corrections(chunks, all_flags, model=model)
+    parsed, api_errors = call_codex_for_corrections(chunks, all_flags, model=model)
+    if stats is not None:
+        stats.update({"fmt": fmt_count, "flags": total_flags,
+                      "corrections": 0, "api_errors": api_errors})
+    if api_errors:
+        # 单次调用即全部覆盖，失败等于零覆盖。此时产出 corrected.srt 就是把
+        # 未精校字幕当成已精校，宁可不产出，让上游据此停下。
+        print(f"  ✗ 校对失败  fmt={fmt_count} flags={total_flags} "
+              f"corrections=0 api_errors={api_errors} "
+              f"→ 未产出 {output_path.name}", flush=True)
+        return None
+
     chunk_texts = [c["text"] for c in chunks]
-    corrs = validate_corrections(parsed, chunk_texts, all_flags)
+    corrs = merge_corrections(
+        validate_corrections(parsed, chunk_texts, all_flags),
+        validate_corrections_full_scan(parsed, chunk_texts),
+        chunk_texts,
+    )
     corrected = apply_corrections(list(chunks), corrs)
     total_corrections = len(corrs)
     scan_corrections = 0  # 已合并入单次调用，不再单独统计
+    if stats is not None:
+        stats["corrections"] = total_corrections
 
     # ── 步骤 4：实体一致性检查（seeds）────────────────────────────────────────
     if seeds:
@@ -623,7 +705,7 @@ def correct_file(
 
     write_srt(corrected, output_path)
     print(f"  ✓ 完成  fmt={fmt_count} flags={total_flags} "
-          f"corrections={total_corrections}+{scan_corrections}(scan) api_errors=0 "
+          f"corrections={total_corrections}+{scan_corrections}(scan) api_errors={api_errors} "
           f"→ {output_path.name}", flush=True)
     return output_path
 
@@ -644,14 +726,22 @@ def main():
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
-    result = correct_file(
-        Path(args.qwen_srt),
-        episode_seeds=args.seeds,
-        model=args.model,
-        verbose=args.verbose,
-    )
-    if result:
-        print(f"\n输出: {result}")
+    try:
+        result = correct_file(
+            Path(args.qwen_srt),
+            episode_seeds=args.seeds,
+            model=args.model,
+            verbose=args.verbose,
+        )
+    except CodexUnavailableError as e:
+        print(f"\n{'='*55}", file=sys.stderr)
+        print(f"✗ 字幕精校无法运行\n\n{e}", file=sys.stderr)
+        print(f"{'='*55}", file=sys.stderr)
+        sys.exit(1)
+
+    if not result:
+        sys.exit(1)
+    print(f"\n输出: {result}")
 
 
 if __name__ == "__main__":

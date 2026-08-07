@@ -168,21 +168,61 @@ def _fmt_ts(seconds: float) -> str:
 
 
 def correct(qwen_srt: Path, episode_seeds: list[str], model: str | None) -> Path | None:
-    from correct_srt import correct_file
+    from correct_srt import CodexUnavailableError, correct_file
     t0 = time.time()
     print(f"  Codex CLI 校对中…", flush=True)
-    result = correct_file(
-        qwen_srt,
-        episode_seeds=episode_seeds,
-        model=model,
-        verbose=False,
-    )
+    stats: dict = {}
+    try:
+        result = correct_file(
+            qwen_srt,
+            episode_seeds=episode_seeds,
+            model=model,
+            verbose=False,
+            stats=stats,
+        )
+    except CodexUnavailableError as e:
+        print(f"\n{'='*55}")
+        print(f"✗ 字幕精校无法运行，流程中止\n")
+        print(f"{e}")
+        print(f"{'='*55}")
+        sys.exit(1)
     elapsed = time.time() - t0
     if result:
         print(f"  ✓ 校对完成  {elapsed:.0f}s")
+        warn_if_uncorrected(qwen_srt, result, stats)
     else:
         print(f"  ✗ 校对失败")
     return result
+
+
+def warn_if_uncorrected(qwen_srt: Path, corrected_srt: Path, stats: dict) -> None:
+    """
+    质量门：LLM 修正数为 0 时告警。
+
+    判据用 corrections 而不是「两文件内容相同」：格式规范化是纯规则层、
+    与 codex 是否真的跑过无关，只要它改了一处，两文件就不再相同——
+    正是这样一次改动会让基于内容比对的质量门漏掉「codex 根本没执行」。
+    内容是否完全一致只作为附加的更强信号一并报出。
+    """
+    if stats.get("corrections", 0) > 0:
+        return
+
+    from correct_srt import parse_srt
+    identical = None
+    try:
+        identical = ([c["text"] for c in parse_srt(qwen_srt)]
+                     == [c["text"] for c in parse_srt(corrected_srt)])
+    except Exception:
+        pass
+
+    print(f"  ⚠ 质量门：corrections=0，本步没有产生任何 LLM 精校修正")
+    if identical:
+        print(f"     且 {corrected_srt.name} 与 {qwen_srt.name} 文本完全一致")
+    elif identical is False:
+        print(f"     （文本有差异，但差异全部来自规则层格式规范化 fmt={stats.get('fmt', 0)}）")
+    print(f"     可能本期确实无需修正，也可能校对引擎未真正生效。先确认引擎：")
+    print(f"       which codex && codex --version && codex login status")
+    print(f"     再决定是否重跑本步；确认无误后本条可忽略，但需人工精校复核。")
 
 
 def resplit(corrected_srt: Path, output_path: Path, max_chars: int = 20) -> Path | None:
