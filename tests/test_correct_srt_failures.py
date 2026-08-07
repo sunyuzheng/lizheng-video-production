@@ -187,6 +187,62 @@ class TestCorrectionsSurviveValidation(TempSrtCase):
         self.assertIn("刘佳", result.read_text(encoding="utf-8"))
 
 
+class TestApplyCorrections(unittest.TestCase):
+    """
+    实体一致性：ASR 听错的公司名/产品名在全片会重复几十次，只改第一处等于
+    prompt 里「把全文所有变体统一成同一写法」没有落地。单字例外——是否该改
+    完全取决于上下文，全局替换会把用对的地方一起改错。
+    """
+
+    @staticmethod
+    def _chunks(texts: list[str]) -> list[dict]:
+        return [{"timestamp": "", "text": t} for t in texts]
+
+    def test_multi_char_replaced_everywhere(self):
+        chunks = self._chunks([f"第{i}句提到了 Superlillian" for i in range(1, 6)])
+        out, n = correct_srt.apply_corrections(
+            chunks, [{"original": "Superlillian", "corrected": "Superlinear"}]
+        )
+        self.assertEqual(n, 5)
+        self.assertTrue(all("Superlinear" in c["text"] for c in out))
+        self.assertFalse(any("Superlillian" in c["text"] for c in out))
+
+    def test_multiple_hits_in_one_chunk(self):
+        chunks = self._chunks(["刘佳老师和刘佳同学"])
+        out, n = correct_srt.apply_corrections(
+            chunks, [{"original": "刘佳", "corrected": "刘嘉"}]
+        )
+        self.assertEqual(n, 2)
+        self.assertEqual(out[0]["text"], "刘嘉老师和刘嘉同学")
+
+    def test_single_char_only_first_occurrence(self):
+        """单字全局替换会误伤——「他」在别处可能本来就是对的。"""
+        chunks = self._chunks(["他说的对", "他是个好人", "他走了"])
+        out, n = correct_srt.apply_corrections(
+            chunks, [{"original": "他", "corrected": "她"}]
+        )
+        self.assertEqual(n, 1)
+        self.assertEqual([c["text"] for c in out], ["她说的对", "他是个好人", "他走了"])
+
+    def test_input_chunks_not_mutated(self):
+        chunks = self._chunks(["提到了 Superlillian"])
+        correct_srt.apply_corrections(
+            chunks, [{"original": "Superlillian", "corrected": "Superlinear"}]
+        )
+        self.assertEqual(chunks[0]["text"], "提到了 Superlillian")
+
+    def test_replacement_count_differs_from_correction_count(self):
+        """汇总日志要能区分「2 条修正」和「6 处替换」。"""
+        chunks = self._chunks(["刘佳 Superlillian", "刘佳 Superlillian", "刘佳 Superlillian"])
+        corrs = [
+            {"original": "刘佳", "corrected": "刘嘉"},
+            {"original": "Superlillian", "corrected": "Superlinear"},
+        ]
+        _, n = correct_srt.apply_corrections(chunks, corrs)
+        self.assertEqual(len(corrs), 2)
+        self.assertEqual(n, 6)
+
+
 class TestQualityGate(TempSrtCase):
     """process_video 的质量门：corrected 与 qwen 文本一致时必须告警。"""
 

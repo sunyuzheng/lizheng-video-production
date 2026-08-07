@@ -491,15 +491,37 @@ def merge_corrections(
     return merged
 
 
-def apply_corrections(chunks: list[dict], corrections: list[dict]) -> list[dict]:
+def apply_corrections(
+    chunks: list[dict], corrections: list[dict]
+) -> tuple[list[dict], int]:
+    """
+    多字修正做全文替换：ASR 听错嘉宾公司名/产品名时，几十处都是同一个错，
+    只改第一处等于 prompt 里要求的「全文一致性统一」没有落地。
+
+    单字修正仍只改第一处：单字该不该改完全取决于上下文（「他」→「她」），
+    全局替换会把用对的地方一并改错。channel_vocab 的 12 条候选词全是多字，
+    单字只可能来自全文扫描，因此这条限制不影响候选词路径。
+
+    Returns:
+        (chunks, replacements) —— replacements 是实际替换处数，不是修正条数
+    """
     result = [dict(c) for c in chunks]
+    replacements = 0
     for corr in corrections:
-        applied = False
-        for chunk in result:
-            if corr["original"] in chunk["text"] and not applied:
-                chunk["text"] = chunk["text"].replace(corr["original"], corr["corrected"], 1)
-                applied = True
-    return result
+        orig, corrected = corr["original"], corr["corrected"]
+        if len(orig) == 1:
+            for chunk in result:
+                if orig in chunk["text"]:
+                    chunk["text"] = chunk["text"].replace(orig, corrected, 1)
+                    replacements += 1
+                    break
+        else:
+            for chunk in result:
+                hits = chunk["text"].count(orig)
+                if hits:
+                    chunk["text"] = chunk["text"].replace(orig, corrected)
+                    replacements += hits
+    return result, replacements
 
 
 # ── 全文 LLM 扫描 ────────────────────────────────────────────────────────────
@@ -673,7 +695,7 @@ def correct_file(
         # 单次调用即全部覆盖，失败等于零覆盖。此时产出 corrected.srt 就是把
         # 未精校字幕当成已精校，宁可不产出，让上游据此停下。
         print(f"  ✗ 校对失败  fmt={fmt_count} flags={total_flags} "
-              f"corrections=0 api_errors={api_errors} "
+              f"corrections=0条/0处 api_errors={api_errors} "
               f"→ 未产出 {output_path.name}", flush=True)
         return None
 
@@ -683,11 +705,11 @@ def correct_file(
         validate_corrections_full_scan(parsed, chunk_texts),
         chunk_texts,
     )
-    corrected = apply_corrections(list(chunks), corrs)
+    corrected, replacements = apply_corrections(list(chunks), corrs)
     total_corrections = len(corrs)
-    scan_corrections = 0  # 已合并入单次调用，不再单独统计
     if stats is not None:
         stats["corrections"] = total_corrections
+        stats["replacements"] = replacements
 
     # ── 步骤 4：实体一致性检查（seeds）────────────────────────────────────────
     if seeds:
@@ -705,7 +727,7 @@ def correct_file(
 
     write_srt(corrected, output_path)
     print(f"  ✓ 完成  fmt={fmt_count} flags={total_flags} "
-          f"corrections={total_corrections}+{scan_corrections}(scan) api_errors={api_errors} "
+          f"corrections={total_corrections}条/{replacements}处 api_errors={api_errors} "
           f"→ {output_path.name}", flush=True)
     return output_path
 
