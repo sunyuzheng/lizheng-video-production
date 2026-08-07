@@ -311,61 +311,6 @@ def call_codex_for_corrections(
         corrections_file.unlink(missing_ok=True)
 
 
-# ── (保留) Prompt 构建（供 validate_corrections 使用）──────────────────────────
-
-def build_prompt(chunks: list[dict], flags: list[dict]) -> tuple[str, str]:
-    system = """你是 Qwen3-ASR 字幕纠错助手。本频道内容以中文为主，话题涵盖职场、AI、投资、创业。
-
-## 允许修正的情况
-1. 已知同音/专有名词混淆（候选词提示中列出的模式，结合上下文判断）
-
-## 绝对禁止
-- 删除/增加实词（名词、动词、形容词）
-- 修改语气词/副词（其实、应该、可能、非常、然后等）
-- 同义词替换
-- 每条 original 超过 6 个字
-
-## 输出格式
-JSON 数组，每项：{"original": "最短精确片段", "corrected": "修正后", "reason": "原因"}
-- original 必须是需要修改的最短子字符串（1-6字）
-- original 必须在字幕中精确存在
-- 不确定时输出 []，宁可漏改，不要误改"""
-
-    srt_lines = []
-    for ci, chunk in enumerate(chunks):
-        srt_lines.append(f"[{ci}] {chunk.get('timestamp', '')}")
-        srt_lines.append(chunk["text"])
-        srt_lines.append("")
-    srt_text = "\n".join(srt_lines)
-
-    if flags:
-        single_hints: dict = {}
-        multi_hints: list = []
-        for f in flags:
-            if f.get("is_single"):
-                h = f["hint"] or f"「{f['found']}」可能是「{'或'.join(f['alternatives'])}」"
-                single_hints[f["hint"] or f["found"]] = h
-            else:
-                alts = "、".join(f["alternatives"]) if f["alternatives"] else "?"
-                multi_hints.append(f"  - 「{f['found']}」→「{alts}」  上下文: …{f.get('context','')}…")
-        flag_lines = ["## 本批字幕中检测到以下可能混淆的模式（请结合上下文判断，不确定则不改）"]
-        if single_hints:
-            flag_lines.append("【同音字】请检查下列字的每次出现是否用对：")
-            for h in single_hints.values():
-                flag_lines.append(f"  - {h}")
-        if multi_hints:
-            flag_lines.append("【具体位置】")
-            flag_lines.extend(multi_hints)
-        hints_text = "\n".join(flag_lines) + "\n\n"
-    else:
-        hints_text = ""
-
-    user = f"{hints_text}## 字幕原文\n{srt_text}\n请输出修正 JSON 数组："
-    return system, user
-
-
-
-
 def parse_llm_response(raw: str) -> Any:
     stripped = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.MULTILINE)
     stripped = re.sub(r"\s*```$", "", stripped.strip(), flags=re.MULTILINE).strip()
@@ -524,39 +469,6 @@ def apply_corrections(
     return result, replacements
 
 
-# ── 全文 LLM 扫描 ────────────────────────────────────────────────────────────
-
-def build_full_scan_prompt(chunks: list[dict]) -> tuple[str, str]:
-    system = """你是语音转录字幕纠错助手。本频道内容以中文为主，话题涵盖职场、AI、投资、创业。
-
-## 你的任务
-找出并修正 ASR（语音识别）造成的错别字。常见错误类型：
-- 同音字混淆（如「刘佳」→「刘嘉」，「沉浮」→「臣服」，「亚哥」→「鸭哥」）
-- 英文品牌/术语拼写错误（如「Superlillian」→「Superlinear」）
-- 数字格式已由规则处理，请勿修改
-
-## 绝对禁止
-- 不要删除重复的短语（说话人的口语重启，如「那天我去，那天我去参加」——这是真实语音）
-- 不要增删实词、不要同义词替换、不要重新措辞
-- 不要修改时间戳行
-
-## 输出格式
-JSON 数组，每项：{"original": "需修改的最短子字符串（1-8字）", "corrected": "修正后", "reason": "简短原因"}
-- original 必须精确存在于字幕原文中
-- 不确定时不输出（宁可漏改，不要误改）
-- 没有需要修改的则输出 []"""
-
-    lines = []
-    for ci, chunk in enumerate(chunks):
-        lines.append(f"[{ci}] {chunk.get('timestamp', '')}")
-        lines.append(chunk["text"])
-        lines.append("")
-    srt_text = "\n".join(lines)
-
-    user = f"## 字幕原文\n{srt_text}\n请输出修正 JSON 数组："
-    return system, user
-
-
 def validate_corrections_full_scan(parsed: Any, chunk_texts: list[str]) -> list[dict]:
     """全文扫描的验证器：比候选词验证器更宽松（不要求 original 在 flag_patterns 里）"""
     full_text = "\n".join(chunk_texts)
@@ -597,42 +509,6 @@ def validate_corrections_full_scan(parsed: Any, chunk_texts: list[str]) -> list[
         corrections = corrections[:5]
 
     return corrections
-
-
-
-
-# ── 实体一致性检查 ────────────────────────────────────────────────────────────
-
-def check_entity_consistency(chunks: list[dict], seeds: list[str]) -> tuple[list[dict], int]:
-    """
-    对用户提供的 seeds（本期嘉宾名/术语），扫描全文看是否有同音/形近变体，
-    用「少数服从多数」原则统一写法。
-    """
-    if not seeds:
-        return chunks, 0
-
-    result = [dict(c) for c in chunks]
-    full_text = " ".join(c["text"] for c in result)
-    fixes = 0
-
-    for seed in seeds:
-        seed = seed.strip()
-        if not seed or len(seed) < 2:
-            continue
-        seed_count = full_text.count(seed)
-        if seed_count == 0:
-            continue
-
-        # 简单策略：只做已知形近字替换（不做 LLM 猜测）
-        # 例如：如果 seed="刘嘉"，就看全文里有没有「刘佳」（形近字）
-        # 这里用一个简单的：找同音字变体（同拼音的常见汉字）
-        # 暂时只处理：seed 出现在全文中，且存在比 seed_count 少的其他形式 → 不做
-        # TODO: 更完善的实体一致性需要 LLM 或音形字典
-
-        # 当前只做：确认 seed 在全文里至少出现 1 次（说明转录对了），输出到报告
-        pass  # placeholder for future enhancement
-
-    return result, fixes
 
 
 # ── 主校对流程 ─────────────────────────────────────────────────────────────────
@@ -711,12 +587,10 @@ def correct_file(
         stats["corrections"] = total_corrections
         stats["replacements"] = replacements
 
-    # ── 步骤 4：实体一致性检查（seeds）────────────────────────────────────────
+    # ── 步骤 4：种子词落地情况（供人工确认）──────────────────────────────────
+    # 实体一致性由 prompt 要求 Codex 统一写法、apply_corrections 全文替换落地，
+    # 这里只报告 seeds 的出现次数，不再做二次猜测。
     if seeds:
-        corrected, entity_fixes = check_entity_consistency(corrected, seeds)
-        if entity_fixes:
-            print(f"  实体统一: {entity_fixes} 处", flush=True)
-        # 打印 seeds 在全文中的出现情况（供用户确认）
         full_text = " ".join(c["text"] for c in corrected)
         for seed in seeds:
             cnt = full_text.count(seed)

@@ -399,11 +399,17 @@ def main():
         else:
             print(f"\n[1/7] 转录 (已跳过) → {qwen_srt.name}")
 
+    # 记录「本该跑却失败」的步骤。跳过不算失败，最后据此决定退出码——
+    # 全流程恒 exit 0 会让失败在自动化里完全看不见。
+    failures: list[str] = []
+
     # ── 2. 校对 ───────────────────────────────────────────────────────────────
     corrected_srt = None
     if not args.skip_correct:
         print("\n[2/7] Codex 字幕校对 + 全文扫描")
         corrected_srt = correct(qwen_srt, episode_seeds, model=args.model)
+        if not corrected_srt:
+            failures.append("[2/7] 字幕校对")
     else:
         corrected_srt = process_dir / f"{stem}.corrected.srt"
         legacy_corrected = delivery_dir / f"{stem}.corrected.srt"
@@ -419,9 +425,12 @@ def main():
     final_path = delivery_dir / f"{stem}.final.srt"
     if corrected_srt and corrected_srt.exists():
         final_srt = resplit(corrected_srt, output_path=final_path, max_chars=args.max_chars)
+        if not final_srt:
+            failures.append("[3/7] 断句")
     else:
         print("  (无校对文件，跳过)")
-        # 降级：用 corrected 或 qwen 作为来源
+        # 降级：用已有文件顶上。这些可能是上一次运行留下的旧产物，
+        # 必须报出实际用了哪个，否则后续四步会拿着来路不明的字幕继续跑。
         for candidate in [
             final_path,
             process_dir / f"{stem}.corrected.srt",
@@ -431,6 +440,11 @@ def main():
         ]:
             if candidate.exists():
                 final_srt = candidate
+                age = time.time() - candidate.stat().st_mtime
+                print(f"  ⚠ 降级使用已有文件：{candidate.name}"
+                      f"（{age / 3600:.0f} 小时前生成，非本次产出）", flush=True)
+                if not args.skip_correct:
+                    failures.append(f"[3/7] 断句（降级用了 {candidate.name}）")
                 break
 
     # ── 4. 提取高光 ───────────────────────────────────────────────────────────
@@ -440,8 +454,11 @@ def main():
         src = final_srt or corrected_srt or qwen_srt
         if src and src.exists():
             highlights_path = highlights(src, output_dir=delivery_dir, stem=stem)
+            if not highlights_path:
+                failures.append("[4/7] 高光提取")
         else:
             print("  (无可用 SRT，跳过)")
+            failures.append("[4/7] 高光提取（无可用 SRT）")
     else:
         candidate = delivery_dir / f"{stem}.highlights.md"
         if candidate.exists():
@@ -455,8 +472,11 @@ def main():
         src = final_srt or corrected_srt or qwen_srt
         if src and src.exists():
             article_path = article(src, output_dir=delivery_dir, stem=stem)
+            if not article_path:
+                failures.append("[5/7] 文章生成")
         else:
             print("  (无可用 SRT，跳过)")
+            failures.append("[5/7] 文章生成（无可用 SRT）")
     else:
         candidate = delivery_dir / f"{stem}.article.md"
         if candidate.exists():
@@ -469,9 +489,11 @@ def main():
         # 优先用 article，其次 final_srt — highlights 会通过文件名自动检测
         src = article_path or final_srt or corrected_srt or qwen_srt
         if src and src.exists():
-            titles(src, output_dir=delivery_dir, workspace_dir=process_dir, stem=stem)
+            if not titles(src, output_dir=delivery_dir, workspace_dir=process_dir, stem=stem):
+                failures.append("[6/7] 标题生成")
         else:
             print("  (无可用来源，跳过)")
+            failures.append("[6/7] 标题生成（无可用来源）")
     else:
         print(f"\n[6/7] 标题生成 (已跳过)")
 
@@ -480,9 +502,11 @@ def main():
         print(f"\n[7/7] 生成 YouTube description")
         src = final_srt or corrected_srt or qwen_srt
         if src and src.exists():
-            youtube_description(src, output_dir=delivery_dir, stem=stem)
+            if not youtube_description(src, output_dir=delivery_dir, stem=stem):
+                failures.append("[7/7] YouTube description")
         else:
             print("  (无可用 SRT，跳过)")
+            failures.append("[7/7] YouTube description（无可用 SRT）")
     else:
         print(f"\n[7/7] YouTube description 生成 (已跳过)")
 
@@ -498,6 +522,15 @@ def main():
     title_ws = process_dir / f"{stem}_title_ws"
     print(f"  {'✓' if title_ws.exists() else '✗'} {title_ws.name}/")
     print()
+
+    if failures:
+        print(f"{'='*55}")
+        print(f"✗ {len(failures)} 个步骤未成功完成：")
+        for f in failures:
+            print(f"    {f}")
+        print("  上面标 ✓ 的产物可能来自此前的运行，不代表本次已生成。")
+        print(f"{'='*55}\n")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
