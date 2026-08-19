@@ -100,12 +100,15 @@ def transcribe(video_path: Path, output_dir: Path, context: str = "") -> Path:
         print(f"  [跳过] 已存在 {qwen_srt.name}")
         return qwen_srt
 
-    cli = shutil.which("mlx-qwen3-asr")
+    venv_cli = Path(sys.executable).parent / "mlx-qwen3-asr"
     homebrew_cli = Path("/opt/homebrew/bin/mlx-qwen3-asr")
+    cli = shutil.which("mlx-qwen3-asr")
+    if not cli and venv_cli.exists():
+        cli = str(venv_cli)
     if not cli and homebrew_cli.exists():
         cli = str(homebrew_cli)
     if not cli:
-        print("错误: 未找到 mlx-qwen3-asr CLI，请确认 /opt/homebrew/bin/mlx-qwen3-asr 可用")
+        print(f"错误: 未找到 mlx-qwen3-asr CLI，请确认 {venv_cli} 或 {homebrew_cli} 可用")
         sys.exit(1)
 
     if context:
