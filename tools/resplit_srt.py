@@ -35,6 +35,17 @@ except ImportError:
 DEFAULT_MAX_CHARS = 20
 MERGE_MAX_GAP = 0.6      # 秒：cue 间停顿超过此值视为真实停顿，不跨越合并
 MERGE_MAX_CHARS = 200    # 合并窗口字符上限，限制时间戳插值误差累积
+DEFAULT_MAX_CPS = 25.0
+DEFAULT_MIN_DURATION = 0.2
+
+_LATIN_TOKEN_RE = re.compile(
+    r"^[A-Za-z0-9]+(?:['’+_.-][A-Za-z0-9]+)*(?:%|\.com)?$"
+)
+
+
+def _visible_len(text: str) -> int:
+    """Count readable CJK/Latin/digit content, excluding spaces/punctuation."""
+    return len(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]", text))
 
 _TERM_REPLACEMENTS = [
     ("NortonNeo", "Norton Neo"),
@@ -132,7 +143,7 @@ def split_text(text: str, max_chars: int = DEFAULT_MAX_CHARS) -> list[str]:
     text = text.strip()
     if not text:
         return []
-    if len(text) <= max_chars:
+    if _visible_len(text) <= max_chars:
         return [text]
 
     segments: list[str] = []
@@ -142,7 +153,7 @@ def split_text(text: str, max_chars: int = DEFAULT_MAX_CHARS) -> list[str]:
     sentence_parts = [p.strip() for p in sentence_parts if p.strip()]
 
     for part in sentence_parts:
-        if len(part) <= max_chars:
+        if _visible_len(part) <= max_chars:
             segments.append(part)
             continue
 
@@ -152,13 +163,13 @@ def split_text(text: str, max_chars: int = DEFAULT_MAX_CHARS) -> list[str]:
 
         buf = ""
         for cp in clause_parts:
-            if len(buf) + len(cp) <= max_chars:
+            if _visible_len(buf + cp) <= max_chars:
                 buf += cp
             else:
                 if buf:
                     segments.append(buf)
                 # cp 本身还是太长 → 按词边界切，不切开词
-                if len(cp) > max_chars:
+                if _visible_len(cp) > max_chars:
                     packed = _pack_tokens(_tokenize(cp), max_chars)
                     segments.extend(packed[:-1])
                     buf = packed[-1] if packed else ""
@@ -171,26 +182,45 @@ def split_text(text: str, max_chars: int = DEFAULT_MAX_CHARS) -> list[str]:
 
 
 def _tokenize(text: str) -> list[str]:
-    """切成不可再分的单元：jieba 词（保留空格 token）；无 jieba 时退回空格切分。"""
-    if _HAS_JIEBA:
-        return list(jieba.cut(text))
-    parts = text.split(" ")
-    return [p + " " for p in parts[:-1]] + parts[-1:]
+    """Preserve complete Latin tokens; only use jieba inside CJK runs."""
+    atoms = re.findall(
+        r"[A-Za-z0-9]+(?:['’+_.-][A-Za-z0-9]+)*(?:%|\.com)?"
+        r"|[\u4e00-\u9fff]+|\s+|[^\s]",
+        text,
+    )
+    out: list[str] = []
+    for atom in atoms:
+        if _HAS_JIEBA and re.fullmatch(r"[\u4e00-\u9fff]+", atom):
+            out.extend(jieba.cut(atom))
+        else:
+            out.append(atom)
+    return out
 
 
 def _pack_tokens(tokens: list[str], max_chars: int) -> list[str]:
-    """把 token 依序装进 ≤max_chars 的行里，单个超长 token 才强制截断。"""
+    """Pack tokens without ever splitting a Latin word across subtitle cues."""
     out: list[str] = []
     buf = ""
     for tok in tokens:
-        if len(buf) + len(tok) <= max_chars:
+        if _visible_len(buf + tok) <= max_chars:
             buf += tok
         else:
             if buf.strip():
                 out.append(buf.strip())
-            while len(tok) > max_chars:
-                out.append(tok[:max_chars])
-                tok = tok[max_chars:]
+            if _LATIN_TOKEN_RE.fullmatch(tok.strip()):
+                # A rare >N-character product name is preferable to a broken
+                # word; subtitle_qc.py will flag it for a manual display choice.
+                buf = tok
+                continue
+            while _visible_len(tok) > max_chars:
+                cut = 0
+                visible = 0
+                for cut, char in enumerate(tok, 1):
+                    visible += int(bool(re.match(r"[\u4e00-\u9fffA-Za-z0-9]", char)))
+                    if visible >= max_chars:
+                        break
+                out.append(tok[:cut].strip())
+                tok = tok[cut:]
             buf = tok
     if buf.strip():
         out.append(buf.strip())
@@ -310,6 +340,77 @@ def _segment_times(
     return times
 
 
+def _repair_display_timing(
+    result: list[dict],
+    *,
+    max_cps: float = DEFAULT_MAX_CPS,
+    min_duration: float = DEFAULT_MIN_DURATION,
+) -> list[dict]:
+    """Fix tiny/fast cues by borrowing only nearby slack or silence.
+
+    This keeps the outer boundary of a local speech cluster fixed.  It avoids
+    the common failure where a valid English word becomes a 0.1–0.3s cue after
+    character-proportional re-timing.
+    """
+    cues = []
+    for item in result:
+        start, end = _parse_ts(item["timestamp"])
+        cues.append({"start": start, "end": end, "text": item["text"]})
+
+    for i, cue in enumerate(cues):
+        target = max(min_duration, _visible_len(cue["text"]) / max_cps)
+        deficit = target - (cue["end"] - cue["start"])
+        if deficit <= 0.0005:
+            continue
+
+        prev_end = cues[i - 1]["end"] if i else 0.0
+        take = min(deficit, max(0.0, cue["start"] - prev_end))
+        cue["start"] -= take
+        deficit -= take
+
+        next_start = cues[i + 1]["start"] if i + 1 < len(cues) else cue["end"]
+        take = min(deficit, max(0.0, next_start - cue["end"]))
+        cue["end"] += take
+        deficit -= take
+        if deficit <= 0.0005:
+            continue
+
+        donors: list[tuple[float, int]] = []
+        for donor_idx in range(max(0, i - 3), min(len(cues), i + 4)):
+            if donor_idx == i:
+                continue
+            lo, hi = sorted((donor_idx, i))
+            if any(cues[k + 1]["start"] - cues[k]["end"] > 0.05 for k in range(lo, hi)):
+                continue
+            donor = cues[donor_idx]
+            floor = max(min_duration, _visible_len(donor["text"]) / max_cps)
+            slack = donor["end"] - donor["start"] - floor
+            if slack > 0.001:
+                donors.append((slack, donor_idx))
+        if not donors:
+            continue
+
+        slack, donor_idx = max(donors)
+        take = min(deficit, slack)
+        if donor_idx < i:
+            cues[donor_idx]["end"] -= take
+            for k in range(donor_idx + 1, i):
+                cues[k]["start"] -= take
+                cues[k]["end"] -= take
+            cue["start"] -= take
+        else:
+            cue["end"] += take
+            for k in range(i + 1, donor_idx):
+                cues[k]["start"] += take
+                cues[k]["end"] += take
+            cues[donor_idx]["start"] += take
+
+    return [
+        {"timestamp": _fmt_range(cue["start"], cue["end"]), "text": cue["text"]}
+        for cue in cues
+    ]
+
+
 # ── 主函数 ────────────────────────────────────────────────────────────────────
 
 def resplit_srt(
@@ -340,6 +441,8 @@ def resplit_srt(
             continue
         for seg, (t0, t1) in zip(segments, _segment_times(window, segments)):
             result.append({"timestamp": _fmt_range(t0, t1), "text": seg})
+
+    result = _repair_display_timing(result)
 
     with open(output_path, "w", encoding="utf-8") as f:
         for i, c in enumerate(result, 1):

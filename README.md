@@ -23,7 +23,7 @@
 |------|------|---------|------|
 | 1. 转录 | Qwen3-ASR 本地转录（注入频道热词 + seeds） | `.qwen.srt` | 本地模型，完全离线 |
 | 2. 精校 | 同音字、专有名词、**实体全文一致性**（如公司名被听成两种写法） | `.corrected.srt` | Codex CLI |
-| 3. 断句 | **先合并再重切**：跨越 ASR 坏 cue 边界，按标点/jieba 词边界切 ≤20 字 | `.final.srt` | 本地规则，无需 API |
+| 3. 断句 + QC | **先合并再重切**：跨越 ASR 坏 cue 边界，不拆拉丁词；检查字数、时长、重叠、阅读速度并导出 VTT | `.final.srt` `.final.vtt` | 本地规则，无需 API |
 | 4. 说话人标注（访谈可选） | 本地 pyannote diarization；可选已知声纹匹配；生成 speaker-labeled transcript | `.speaker_labeled.srt/.md` | 本地模型 |
 | 5. 高光 | 独立的观众感模块：时间戳 + 原话 + cognitive gap + 叙事弧 + 剪辑组合 | `.highlights.md` | Claude Code CLI |
 | 6. 文章 | 按判型分流；自动读取高光做跳转地图；禁元叙述和空转总结 | `.article.md` | Claude Code CLI |
@@ -195,7 +195,7 @@ venv-diarization/bin/python tools/speaker_attribution.py \
 
 | 文件 | 说明 | 用途 |
 |------|------|------|
-| `视频名.final.srt` | 最终字幕，≤20字/条，词不切开 | **导入剪辑软件用这个** |
+| `视频名.final.srt` / `视频名.final.vtt` | 最终字幕，≤20字/条，词不切开，已通过时长/阅读速度 QC | **剪辑软件与社区字幕** |
 | `视频名.speaker_labeled.srt` | 带说话人前缀的字幕 | 访谈归因校验 / 二次内容生成 |
 | `视频名.speaker_labeled.md` | 按说话人 turn 合并的阅读稿 | 高光、文章、标题的访谈输入 |
 | `视频名.highlights.md` | 高光候选 + 叙事弧 + 推荐剪辑组合 | 剪辑跳转 + 标题原料 |
@@ -266,6 +266,7 @@ ASR 的原始 cue 边界经常落在词中间（「…这是你的事 / 情当�
 | `tools/codex_cli.py` | Codex CLI 文件响应封装 |
 | `tools/correct/correct_srt.py` | 精校引擎：同音字 + 实体一致性 + 全文覆盖（可单独调用） |
 | `tools/resplit_srt.py` | 断句：合并窗口 + jieba 词边界（可单独调用） |
+| `tools/subtitle_qc.py` | 字幕硬质量门 + 从最终 SRT 导出同文 VTT |
 | `tools/build_speaker_refs.py` | 从单人音视频中抽取本地 speaker reference clips（可选） |
 | `tools/speaker_attribution.py` | 本地 pyannote diarization + 可选声纹匹配，生成 speaker-labeled SRT/MD（可选） |
 | `tools/generate_highlights.py` | 高光提取，自动判型单口/访谈（可单独调用） |

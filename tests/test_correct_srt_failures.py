@@ -124,6 +124,23 @@ class TestCodexCallFails(TempSrtCase):
         self.assertEqual(api_errors, 0)
         self.assertEqual(parsed[0]["corrected"], "刘嘉")
 
+    def test_longform_timeout_is_forwarded(self):
+        seen = {}
+
+        def _fake(prompt, output_path, **kwargs):
+            seen.update(kwargs)
+            output_path.write_text("[]", encoding="utf-8")
+            return "[]"
+
+        with unittest.mock.patch.object(
+            correct_srt, "call_codex_file_based", side_effect=_fake
+        ):
+            _, api_errors = correct_srt.call_codex_for_corrections(
+                [], [], timeout=1234
+            )
+        self.assertEqual(api_errors, 0)
+        self.assertEqual(seen["timeout"], 1234)
+
     def test_correct_file_produces_no_output_on_api_error(self):
         with unittest.mock.patch.object(
             correct_srt.shutil, "which", return_value="/opt/homebrew/bin/codex"

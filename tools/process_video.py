@@ -167,7 +167,12 @@ def _fmt_ts(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def correct(qwen_srt: Path, episode_seeds: list[str], model: str | None) -> Path | None:
+def correct(
+    qwen_srt: Path,
+    episode_seeds: list[str],
+    model: str | None,
+    timeout: int = 900,
+) -> Path | None:
     from correct_srt import CodexUnavailableError, correct_file
     t0 = time.time()
     print(f"  Codex CLI 校对中…", flush=True)
@@ -177,6 +182,7 @@ def correct(qwen_srt: Path, episode_seeds: list[str], model: str | None) -> Path
             qwen_srt,
             episode_seeds=episode_seeds,
             model=model,
+            timeout=timeout,
             verbose=False,
             stats=stats,
         )
@@ -239,6 +245,34 @@ def resplit(corrected_srt: Path, output_path: Path, max_chars: int = 20) -> Path
     except Exception as e:
         print(f"  ✗ 断句失败: {e}")
         return None
+
+
+def validate_and_export_subtitles(
+    final_srt: Path,
+    vtt_path: Path,
+    report_path: Path,
+    max_chars: int = 20,
+) -> bool:
+    """Run the hard delivery gate and export VTT from the exact final text."""
+    sys.path.insert(0, str(_TOOLS))
+    from subtitle_qc import inspect, parse_srt, write_report, write_vtt
+
+    cues = parse_srt(final_srt)
+    findings = inspect(cues, max_chars=max_chars, min_duration=0.2, max_cps=25.0)
+    write_vtt(cues, vtt_path)
+    write_report(cues, findings, report_path)
+    failed = sum(len(items) for items in findings.values())
+    if failed:
+        print(
+            "  ✗ 字幕 QC 未通过："
+            f"invalid={len(findings['invalid'])} "
+            f"overlaps={len(findings['overlaps'])} "
+            f"long={len(findings['long'])} "
+            f"short={len(findings['short'])} fast={len(findings['fast'])}"
+        )
+        return False
+    print(f"  ✓ 字幕 QC 通过并导出 VTT → {vtt_path.name}")
+    return True
 
 
 def article(final_srt: Path, output_dir: Path, stem: str) -> Path | None:
@@ -333,6 +367,12 @@ def main():
         default=None,
         help="过程文件目录（默认 <视频名>_process，最终交付仍在视频同目录）",
     )
+    parser.add_argument(
+        "--correction-timeout",
+        type=int,
+        default=900,
+        help="Codex 全文字幕校对超时秒数（默认 900）",
+    )
     parser.add_argument("--max-chars", type=int, default=20,
                         help="断句：每条字幕最大字符数（默认 20）")
     args = parser.parse_args()
@@ -407,7 +447,12 @@ def main():
     corrected_srt = None
     if not args.skip_correct:
         print("\n[2/7] Codex 字幕校对 + 全文扫描")
-        corrected_srt = correct(qwen_srt, episode_seeds, model=args.model)
+        corrected_srt = correct(
+            qwen_srt,
+            episode_seeds,
+            model=args.model,
+            timeout=args.correction_timeout,
+        )
         if not corrected_srt:
             failures.append("[2/7] 字幕校对")
     else:
@@ -427,6 +472,13 @@ def main():
         final_srt = resplit(corrected_srt, output_path=final_path, max_chars=args.max_chars)
         if not final_srt:
             failures.append("[3/7] 断句")
+        else:
+            vtt_path = delivery_dir / f"{stem}.final.vtt"
+            qc_path = process_dir / f"{stem}.subtitle_qc.md"
+            if not validate_and_export_subtitles(
+                final_srt, vtt_path, qc_path, max_chars=args.max_chars
+            ):
+                failures.append("[3/7] 字幕 QC")
     else:
         print("  (无校对文件，跳过)")
         # 降级：用已有文件顶上。这些可能是上一次运行留下的旧产物，

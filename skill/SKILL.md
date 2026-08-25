@@ -1,11 +1,11 @@
 ---
 name: kdb-video-post-production
-description: 给定视频、音频或已有字幕，完成本地转写、字幕精校、断句，并按视频类型（单口/访谈）分流产出：高光选取、文章（单口外发稿或访谈伴读稿）、标题（频道多轮标题，或经 xhs-cover-title 产出小红书封面+标题）、YouTube description、访谈封面图；需要嘉宾审阅或团队交接时，可追加分 tab Google Doc。转写用 mlx-qwen3-asr 1.7B，精校用 Codex CLI，内容生成用 Claude Code Fable 5，不可用时降级 Codex gpt-5.5。
+description: 给定视频、独立录音或已有字幕，完成双录音漂移对齐、剪前导、社区版压制、本地转写、字幕精校/VTT/QC，并按单口或访谈分流产出高光、伴读文章、标题、YouTube description、封面和 Circle 活动回放帖子草稿；需要嘉宾审阅或团队交接时可追加分 tab Google Doc。转写用 mlx-qwen3-asr 1.7B，精校用 Codex CLI，内容生成默认 Claude Code Fable 5、不可用时降级 Codex gpt-5.5。
 ---
 
-# KDB 视频后期生产 v2
+# KDB 视频后期生产 v3
 
-一段原始录制 → 五类资产：**①精校字幕 ②高光 ③文章 ④标题 ⑤YouTube description**（+ 访谈封面图、说话人标注、嘉宾审阅 Google Doc 等可选件）。
+一段原始录制 → 核心内容资产：**①精校字幕/VTT ②高光 ③文章 ④标题 ⑤YouTube description**；如用户同时给独立录音或要求社区发布，再追加**对齐成片、封面、字幕 QC、Circle 草稿**。
 
 两条铁律贯穿全程：
 - **确定性优先**：有脚本的环节跑脚本，agent 只做判型、路由、把关和脚本兜不住的部分，不徒手重做脚本已覆盖的工作。
@@ -31,7 +31,7 @@ description: 给定视频、音频或已有字幕，完成本地转写、字幕�
 - **交付区** = 视频同目录：只放最终交付文件（见「交付物」表）。
 - **工作区** = `<video>_process/`：所有中间产物（raw ASR、corrected 字幕、轮次草稿）。过程文件不当交付，也不覆盖——原始转写稿永远保留。
 - **资料区**（只读引用，更新只走「持续校准」）：
-  - 实现仓库 `/Users/sunyuzheng/Desktop/AI/content/kdb-video-pipeline/`：全部脚本 + `data/`（`guideline_kedaibiao.md` 编辑标准、`top_titles.txt` 频道高播标题基准、`channel_vocab.json` 术语库）
+  - 实现目录 `<implementation_root>`：先检查 `SKILL.md` 同目录是否有 `tools/process_video.py`；没有则检查上一级。这里包含全部脚本 + `data/`（`guideline_kedaibiao.md` 编辑标准、`top_titles.txt` 频道高播标题基准、`channel_vocab.json` 术语库）。不要依赖某台机器上的硬编码 Desktop 路径。
   - `/Users/sunyuzheng/Desktop/AI/skills/xhs-cover-title/`：小红书封面+标题手艺（含 hot-words、examples）
 
 ## 第 1 步：精校字幕（质量地基）
@@ -43,7 +43,7 @@ description: 给定视频、音频或已有字幕，完成本地转写、字幕�
 - 字幕精校默认用 Codex CLI，重点修术语、数字、日期、实体和反复识别错误；之后重新断句，适合上屏和剪辑。
 
 ```bash
-cd /Users/sunyuzheng/Desktop/AI/content/kdb-video-pipeline
+cd <implementation_root>
 
 # 完整链路（含高光/文章/标题）
 caffeinate -i venv/bin/python tools/process_video.py /path/to/video.mp4 --seeds 术语1 术语2
@@ -52,6 +52,15 @@ caffeinate -i venv/bin/python tools/process_video.py /path/to/video.mp4 --seeds 
 caffeinate -i venv/bin/python tools/process_video.py /path/to/video.mp4 --seeds 术语1 术语2 --skip-highlights --skip-article --skip-titles
 ```
 
+### 长视频校对与交付质量门（强制）
+
+- 60 分钟以上默认把 Codex 全文校对超时设为 **900 秒或更高**；`tools/process_video.py --correction-timeout 900`。超时/失败必须硬失败，不能把 raw ASR 冒充 corrected 字幕。
+- LLM 第一轮之后必须做第二轮人工语境精校；每一条替换只能修改目标 cue，提交前同时复核前后各一个 cue，防止跨 cue 搬词、重复或删词。
+- 最终断句后运行 `tools/subtitle_qc.py` 并从同一份 SRT 导出 VTT。硬门：非正时长 0、重叠 0、可见字符 >20 为 0、<0.2 秒为 0、>25 字/秒为 0。
+- 拉丁词、产品名、人名不得被从中间拆成两个 cue；若自动断句留下异常，先回到 corrected SRT 修复边界，再重切，不能在 VTT 单独改一份造成文本分叉。
+
+详细做法见 `references/longform-community-delivery.md`。
+
 ### 访谈说话人标注（可选但推荐）
 
 访谈里如果文章/高光需要严格区分「主持人说」和「嘉宾说」，在 `.final.srt` 之后加本地 speaker attribution 层。它不替代 ASR；ASR 负责「说了什么」，diarization 负责「谁在说」。
@@ -59,7 +68,7 @@ caffeinate -i venv/bin/python tools/process_video.py /path/to/video.mp4 --seeds 
 安装使用独立环境，避免污染主 ASR venv：
 
 ```bash
-cd /Users/sunyuzheng/Desktop/AI/content/kdb-video-pipeline
+cd <implementation_root>
 /opt/homebrew/bin/python3.11 -m venv venv-diarization
 venv-diarization/bin/pip install -r requirements-diarization.txt
 ```
@@ -103,6 +112,15 @@ venv-diarization/bin/python tools/speaker_attribution.py /path/to/video.mp4 \
 - `<video>_process/<video>.speaker_qc.md`
 
 下游规则：如果存在 `.speaker_labeled.md`，访谈高光/文章优先读它；只有 speaker label 置信足够时才能写「嘉宾说 / 我问」。`UNKNOWN` / `MIXED` 段落只能写「对话中提到」，不得靠语义强行归因。
+
+### 双独立录音对齐与社区成片（提供 WAV 时强制）
+
+- 不能只求一个开头 offset。至少取前、中、后 3 组锚点，拟合 `external_time = offset + rate × camera_time`；把 recorder clock drift 一起校正，记录 ppm 和锚点残差。
+- 两支单声道录音按真实人物映射到成片左右声道；先识别谁是哪支麦，再做响度、限幅和异常段处理。某支麦爆音/掉线时可平滑降权，不能偷偷回用机内声代替用户指定的 WAV。
+- 剪前导以第一句正式开场为语义点，再选择不会吞字的干净帧/关键帧；字幕、VTT、文章时间戳都以剪后成片 00:00 为基准。
+- Circle 4GB 上限场景目标设为约 **3.8GB** 留封装余量，默认 H.264 1080p、AAC 48kHz；最终必须做 ffprobe 和全片 decode QC。
+
+同步、音频容错、压制和 Circle 交付细节见 `references/longform-community-delivery.md`。
 
 ## 第 2 步：高光（独立模块，观众感）
 
@@ -158,6 +176,8 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md
 
 如果用 **Codex CLI 侧的 `imagegen` skill** 做图（不是 Claude skill，产物落在 `$CODEX_HOME/generated_images/`），最终图仍必须拷贝到视频同目录，不能只留在 generated_images。
 
+人物访谈封面使用现场截图时，imagegen 只做背景净化、光线和环境层次；人物身份、脸、发型、表情和姿态都视为不变量。中文标题优先用确定性排版脚本叠加，避免生成模型写错字。输出后按缩略图尺寸再检查一次可读性。
+
 ## 第 6 步：YouTube description（发布说明）
 
 入口：`venv/bin/python tools/generate_youtube_description.py /path/to/video.final.srt`，产出 `<video>.youtube-description.txt`。
@@ -188,11 +208,18 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md
 - Google Doc 里不要保留 Markdown 控制符，例如 `**标题**`；用 Google Docs 样式或纯文本。
 - 如果 Google Docs tabs API 不可用，降级为单文档内同名一级标题分区，并向用户说明。
 
+## 第 8 步：Circle 活动回放草稿（按需）
+
+先在本地生成完整帖子草稿，再进入 Circle。草稿应包含标题、两段内的观看理由、嘉宾信息、视频/字幕说明、伴读文章正文、讨论问题；不要只贴一个视频和文件名。
+
+上传顺序建议：16:9 thumbnail → 约 3.8GB 社区版 MP4 → 对应 VTT → 正文。平台页面显示上传完成、视频可处理后才保存草稿。**只保存 draft，不发布**；任何发布、群发通知或把草稿变成可见帖子的动作，都必须再次获得用户确认。
+
 ## 交付物
 
 | 文件 | 何时生成 | 由谁生成 |
 |---|---|---|
 | `<video>.final.srt` | 总是 | 脚本流水线 |
+| `<video>.final.vtt` / `<video>_process/*.subtitle_qc.md` | 字幕交付 | subtitle_qc.py |
 | `<video>.speaker_labeled.srt` / `<video>.speaker_labeled.md` | 访谈需要严格归因时 | speaker_attribution.py |
 | `<video>_process/*.diarization.rttm` `*.speaker_turns.json` `*.speaker_map.json` `*.speaker_qc.md` | 跑说话人标注时 | speaker_attribution.py |
 | `<video>_process/*.qwen.srt` `*.corrected.srt` | 总是（工作区） | 脚本流水线 |
@@ -205,6 +232,8 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md
 | `<video>.cover-3x4.png` | 小红书发布默认 | 截图/设计或 imagegen |
 | `<video>.cover-4x3.png` | B站/抖音/视频号发布默认 | 截图/设计或 imagegen |
 | Google Doc URL | 嘉宾审阅 / 团队交接时 | Google Drive/Docs connector |
+| `<video>_community.mp4` / `<video>_thumbnail_16x9.jpg` | 社区活动回放 | ffmpeg + 封面流程 |
+| `<video>_Circle活动回放帖子草稿.md` | Circle 草稿发布 | agent 基于伴读文章整理 |
 
 不为形式完整强行生成用户没要的产物；用户明确说不要标题，就不生成 `.titles.md`。
 
@@ -212,6 +241,9 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md
 
 - 本地 ASR 输出里能看到 `mlx-qwen3-asr`、`Qwen/Qwen3-ASR-1.7B` 和进度信息。
 - `.qwen.srt`、`.corrected.srt` 在工作区；`.final.srt` 和各交付物在交付区。
+- `.final.srt` 与 `.final.vtt` 文本逐 cue 一致；字幕 QC 五项硬门全部为 0。
+- 使用独立 WAV 时，对齐报告包含 offset、rate/ppm、前中后残差；成片音轨只来自用户指定 WAV，异常段处理有记录。
+- Circle 社区版不超过平台硬限制并留出余量；ffprobe 规格正确，全片 decode 无错误；草稿未被误发布。
 - 专有名词、数字、日期、工具名全链路一致；字幕断句适合上屏，无 ASR 原始长块。
 - 所有下游内容（高光/文章/标题/小红书）都基于 `.final.srt`，不直接依赖 raw ASR。
 - 文章形态与判型一致：单口=独立外发稿，访谈=伴读稿；嘉宾判断没有被写成主播判断。

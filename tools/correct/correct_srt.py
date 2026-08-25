@@ -281,7 +281,7 @@ def call_codex_for_corrections(
     chunks: list[dict],
     flags: list[dict],
     model: str | None = DEFAULT_CODEX_MODEL,
-    timeout: int = 300,
+    timeout: int = 900,
 ) -> tuple[Any, int]:
     """
     文件响应模式：将全文 SRT + 候选词提示写入临时文件，
@@ -517,6 +517,7 @@ def correct_file(
     qwen_path: Path,
     episode_seeds: list[str] | None = None,
     model: str | None = DEFAULT_CODEX_MODEL,
+    timeout: int = 900,
     verbose: bool = False,
     stats: dict | None = None,
 ) -> Path | None:
@@ -527,6 +528,7 @@ def correct_file(
         qwen_path: .qwen.srt 文件路径
         episode_seeds: 本期嘉宾名、品牌名等（如 ["刘嘉", "Superlinear Academy"]）
         model: Codex 模型；None 表示使用 Codex CLI 默认配置
+        timeout: Codex 全文校对超时秒数；长视频默认 900 秒
         verbose: 是否打印详细日志
         stats: 传入一个 dict 则写入本次统计（fmt/flags/corrections/api_errors），
                供上游做质量门判断——corrections 指 LLM 修正数，不含规则层的 fmt
@@ -563,7 +565,9 @@ def correct_file(
     all_flags = scan_flags(chunks, candidates)
     total_flags = len(all_flags)
 
-    parsed, api_errors = call_codex_for_corrections(chunks, all_flags, model=model)
+    parsed, api_errors = call_codex_for_corrections(
+        chunks, all_flags, model=model, timeout=timeout
+    )
     if stats is not None:
         stats.update({"fmt": fmt_count, "flags": total_flags,
                       "corrections": 0, "api_errors": api_errors})
@@ -619,6 +623,12 @@ def main():
         default=DEFAULT_CODEX_MODEL,
         help="Codex CLI 模型；不传则使用 Codex 默认配置",
     )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=900,
+        help="Codex 全文校对超时秒数（默认 900；长视频不要低于此值）",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -627,6 +637,7 @@ def main():
             Path(args.qwen_srt),
             episode_seeds=args.seeds,
             model=args.model,
+            timeout=args.timeout,
             verbose=args.verbose,
         )
     except CodexUnavailableError as e:
