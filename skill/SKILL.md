@@ -132,12 +132,14 @@ venv-diarization/bin/python tools/speaker_attribution.py /path/to/video.mp4 \
 
 ## 第 3 步：文章（按型分流）
 
-入口：`venv/bin/python tools/generate_article.py /path/to/video.final.srt`。脚本内置了两种形态的写作规范和 `substance-writing-review` 的判断框架（识别有力量的 insight → 放大 → 清理），agent 不重写 prompt，只对产物把关。
+入口：`venv/bin/python tools/generate_article.py /path/to/video.final.srt`。动笔前完整读取 `references/article-editorial-principles.md`。它不是禁句表，而是帮助编辑先理解真实读者、主线、证据，以及素材中已有的智识结构。脚本内置两种文章形态和 `substance-writing-review` 的判断框架；agent 仍需对成稿作编辑判断，不能把 prompt 当成质量保证。
 
 **文章参考高光**：脚本会自动读取同目录的 `highlights.md`，作为选题、时间戳和原话线索——所以必须先跑高光再跑文章（`process_video.py` 已按此顺序；单独跑脚本时自己保证顺序）。
 
 - **单口稿**：像主播本人状态最好时写出的版本——更清楚、更锋利，但不是另一个人写的。不套模板、不改成营销号/AI 总结/咨询报告。发布目标是 Twitter/LinkedIn/Superlinear；如需平台变体（thread 拆分、英文版），在文章定稿后按用户要求另做，不默认生成。
-- **访谈稿**：视频伴读，不是摘要。观看地图 + 高光段落（时间戳、原话、解读、启发）+ 整期核心价值。第一人称但只客观陈述对话、不加内心戏；严格区分主持人和嘉宾的判断；优先完整段落，少并列换行，少「不是……而是……」AI 腔。
+- **访谈稿**：视频伴读，不是摘要。通常从事实或现场进入，用一条有重心的主线组织原话、解释和启发；观看地图负责承接没有进入正文的内容。真实读者要从能力、阶段和缺口来理解，而不是用产品类型拼出来。Daniel Priestley 的 5P 等成熟框架应先被完整理解，编辑表达要让其原名、顺序、定义、例子和内部关系更清楚，而不是用更熟悉的包装将它写薄。第一人称只承接真实经历；严格区分主持人和嘉宾的判断。
+
+定稿时以 Substance、Voice、Reader 三个视角重读。它们是帮助编辑提高分辨率的原则，不是逐项打勾的硬门：文章可以有锋芒、停顿、不均匀和风险，只要这些选择来自材料，并让读者理解得更准确。
 
 ## 第 4 步：标题（钩子工程，两条路线）
 
@@ -210,7 +212,7 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md
 
 ## 第 8 步：Circle 活动回放草稿（按需）
 
-先在本地生成完整帖子草稿，再进入 Circle。草稿应包含标题、两段内的观看理由、嘉宾信息、视频/字幕说明、伴读文章正文、讨论问题；不要只贴一个视频和文件名。
+先在本地生成完整帖子草稿，再进入 Circle。通常让视频、伴读文章和真实时间戳章节形成一条连续的阅读路径；讨论问题只有在能把读者带回自身经验时才加入。帖子包装应服务文章主线，避免用一套泛化的「适合谁/你将收获」稀释正文。
 
 上传顺序建议：16:9 thumbnail → 约 3.8GB 社区版 MP4 → 对应 VTT → 正文。平台页面显示上传完成、视频可处理后才保存草稿。**只保存 draft，不发布**；任何发布、群发通知或把草稿变成可见帖子的动作，都必须再次获得用户确认。
 
@@ -259,4 +261,5 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md
 - 发布后的高播标题 → 追加进资料区 `top_titles.txt`，保持路线 A 的外部基准不过时。
 - 小红书发布后实际采用的封面标题和数据 → 走 xhs-cover-title 自己的校准机制（examples.md 追加区）。
 - 用户对高光/文章产物的修改 → 提炼成规则改进 `guideline_kedaibiao.md` 或脚本 prompt（资料区是规则的权威出处，本文件只描述流程，不复述规则全文）。
+- 用户指出 AI 味、受众失焦或成熟框架失真 → 回到具体失败稿与原材料，提炼「什么更好、为什么」并更新 `references/article-editorial-principles.md`、生成 prompt 和编辑示例。避免把一次反馈过拟合成不断增长的禁句表。
 - 反复识别错误的术语：**频道级复用的**（多期会出现）才进 `channel_vocab.json`；单期实体（嘉宾公司名、产品名）走当期 `--seeds`，不进词库。
