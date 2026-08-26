@@ -56,11 +56,14 @@
 ```bash
 git clone https://github.com/sunyuzheng/lizheng-video-production.git
 cd lizheng-video-production
+python3 --version        # 需要 3.10+
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 ```
 
-安装约 3-10 分钟；首次运行会自动下载转录模型（约 1.5 GB）。依赖里的 `jieba` 用于断句的词边界切分。
+如果 `python3 --version` 低于 3.10，改用具体版本建 venv，例如 `/opt/homebrew/bin/python3.12 -m venv venv`。macOS 自带的 `python3` 常常是 Xcode 的 3.9，用它建出来的 venv 装依赖会失败在 `mlx-qwen3-asr`（该包要求 Python >=3.10），报错是 `No matching distribution found`，看不出真实原因。
+
+安装约 3-10 分钟。首次运行会自动下载两个模型，合计约 6 GB：Qwen3-ASR-1.7B（4.4 GB）和 Qwen3-ForcedAligner-0.6B（1.7 GB）。依赖里的 `jieba` 用于断句的词边界切分。
 
 ### 说话人标注安装（可选）
 
@@ -68,14 +71,14 @@ venv/bin/pip install -r requirements.txt
 
 ```bash
 cd lizheng-video-production
-/opt/homebrew/bin/python3.11 -m venv venv-diarization
+/opt/homebrew/bin/python3.11 -m venv venv-diarization   # 3.11 或更高均可，3.12 已验证
 venv-diarization/bin/pip install -r requirements-diarization.txt
 ```
 
 本地 pyannote 模型需要在 Hugging Face 接受模型条款并本机登录一次：
 
 ```bash
-venv-diarization/bin/huggingface-cli login
+venv-diarization/bin/hf auth login
 ```
 
 需要接受：
