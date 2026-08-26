@@ -7,9 +7,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class ArticleEditorialPrinciplesTests(unittest.TestCase):
     def test_reference_teaches_positive_editorial_judgment(self):
-        text = (
-            ROOT / "skill" / "references" / "article-editorial-principles.md"
-        ).read_text(encoding="utf-8")
+        source_layout = ROOT / "skill" / "references" / "article-editorial-principles.md"
+        installed_layout = ROOT / "references" / "article-editorial-principles.md"
+        reference = source_layout if source_layout.exists() else installed_layout
+        text = reference.read_text(encoding="utf-8")
         for idea in (
             "对材料负责",
             "知道自己在对谁说话",
