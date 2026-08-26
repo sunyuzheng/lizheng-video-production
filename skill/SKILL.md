@@ -38,7 +38,7 @@ description: 给定视频、音频或已有字幕，完成本地转写、字幕�
 
 后面一切内容都长在这份字幕上，钩子要捞「原文原话」、引用要准，全靠它。
 
-- 本地转写必须优先用 `/opt/homebrew/bin/mlx-qwen3-asr` CLI，模型固定 `Qwen/Qwen3-ASR-1.7B`，带 `--verbose` 保留可见进度。不用静默 Python API（长视频没有进度，容易误判卡住）。CLI 不可用才降级并向用户说明。
+- 本地转写必须优先用当前 Python 解释器同目录的 `mlx-qwen3-asr` CLI，再回退到 `PATH` 和 `/opt/homebrew/bin/mlx-qwen3-asr`；模型固定 `Qwen/Qwen3-ASR-1.7B`，带 `--verbose` 保留可见进度。不用静默 Python API（长视频没有进度，容易误判卡住）。CLI 不可用才降级并向用户说明。
 - 转写前收集人名、品牌、产品、工具名、课程名，作为 `--seeds` 注入——这份名单同时是后面小红书路线的「主人公背景」原料，别丢。
 - 字幕精校默认用 Codex CLI，重点修术语、数字、日期、实体和反复识别错误；之后重新断句，适合上屏和剪辑。
 

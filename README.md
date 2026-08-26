@@ -63,7 +63,7 @@ venv/bin/pip install -r requirements.txt
 
 如果 `python3 --version` 低于 3.10，改用具体版本建 venv，例如 `/opt/homebrew/bin/python3.12 -m venv venv`。macOS 自带的 `python3` 常常是 Xcode 的 3.9，用它建出来的 venv 装依赖会失败在 `mlx-qwen3-asr`（该包要求 Python >=3.10），报错是 `No matching distribution found`，看不出真实原因。
 
-安装约 3-10 分钟。首次运行会自动下载三个模型，合计约 6 GB：Qwen3-ASR-1.7B（4.4 GB）、Qwen3-ForcedAligner-0.6B（1.7 GB）、Silero-VAD（1 MB）。依赖里的 `jieba` 用于断句的词边界切分。
+安装约 3-10 分钟。首次运行会自动下载两个模型，合计约 6 GB：Qwen3-ASR-1.7B（4.4 GB）和 Qwen3-ForcedAligner-0.6B（1.7 GB）。依赖里的 `jieba` 用于断句的词边界切分。
 
 ### 说话人标注安装（可选）
 

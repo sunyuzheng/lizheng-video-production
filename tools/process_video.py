@@ -92,6 +92,17 @@ def process_dir_for(video_path: Path) -> Path:
     return video_path.parent / f"{episode_stem(video_path)}_process"
 
 
+def _resolve_asr_cli() -> str | None:
+    """优先使用当前 Python 环境的 CLI，再回退到 PATH 和 Homebrew。"""
+    venv_cli = Path(sys.executable).parent / "mlx-qwen3-asr"
+    homebrew_cli = Path("/opt/homebrew/bin/mlx-qwen3-asr")
+    for candidate in (str(venv_cli), "mlx-qwen3-asr", str(homebrew_cli)):
+        cli = shutil.which(candidate)
+        if cli:
+            return cli
+    return None
+
+
 def transcribe(video_path: Path, output_dir: Path, context: str = "") -> Path:
     """mlx-qwen3-asr CLI 转录，输出 <stem>.qwen.srt。"""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -102,11 +113,7 @@ def transcribe(video_path: Path, output_dir: Path, context: str = "") -> Path:
 
     venv_cli = Path(sys.executable).parent / "mlx-qwen3-asr"
     homebrew_cli = Path("/opt/homebrew/bin/mlx-qwen3-asr")
-    cli = shutil.which("mlx-qwen3-asr")
-    if not cli and venv_cli.exists():
-        cli = str(venv_cli)
-    if not cli and homebrew_cli.exists():
-        cli = str(homebrew_cli)
+    cli = _resolve_asr_cli()
     if not cli:
         print(f"错误: 未找到 mlx-qwen3-asr CLI，请确认 {venv_cli} 或 {homebrew_cli} 可用")
         sys.exit(1)
