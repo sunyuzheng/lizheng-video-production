@@ -4,7 +4,7 @@ description: >
   从已经转录或精校的专家、创始人访谈材料中，生成或重写对外中文文章、社区帖、
   视频伴读稿与发布介绍。用于访谈后的公开写作；内部访谈整理用 expert-interview-notes，
   录制前研究用 prepare-guest-interview，原始媒体与整套视频资产用 lizheng-video-editing，
-  非访谈稿件的一般精修用 substance-writing-review。
+  非访谈稿件的起草、重写或深度精修用 substance-writing-review。
 ---
 
 # Expert Interview Article
@@ -20,7 +20,7 @@ description: >
 | 立正／KDB 视频精校字幕，或从原始媒体继续做高光、标题、description、封面等整套资产 | `lizheng-video-editing` |
 | 录制后的内部忠实整理 | `expert-interview-notes` |
 | 已有可读访谈材料，要写公开文章、社区帖、伴读稿或发布介绍 | `expert-interview-article` |
-| 非访谈中文稿的一般结构与语言精修 | `substance-writing-review` |
+| 非访谈中文稿的起草、重写或深度精修 | `substance-writing-review` |
 
 `lizheng-video-editing` 是视频生产的编排器；遇到访谈文章阶段，由本 skill 负责编辑判断。一次任务以主责 skill 为中心，其他 skill 只在确有独立子任务时加入，避免多套写作规范同时改同一篇稿。
 

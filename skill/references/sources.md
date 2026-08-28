@@ -18,7 +18,7 @@
 ## 下游 owner
 
 - 访谈文章：运行时优先使用已安装的 `expert-interview-article`，仓内 `data/writing-skills/expert-interview-article.md` 是版本化 fallback。
-- 单口文章：运行时优先使用已安装的 `substance-writing-review`，仓内同名文件是 fallback。
+- 单口文章：运行时优先使用已安装的 `substance-writing-review`；仓内同名文件同步自公开仓库 `https://github.com/sunyuzheng/substance-writing-review`，作为 fresh clone 的版本化 fallback。
 - 品牌 logo、颜色和资产限制：`superlinear-brand-usage`。
 - 小红书平台专用标题手艺：如果安装了独立的 `xhs-cover-title`，可以作为额外候选来源；主流水线不能依赖用户机器的绝对路径。
 

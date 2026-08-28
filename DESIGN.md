@@ -61,6 +61,6 @@ SRT/VTT、article/brief/context/writing-skill 快照、以及清理版视频/重
 | `data/verified_hotwords.txt` | 人工确认的跨期 ASR 热词 | 一行一词；单期实体不进入 |
 | `data/verified_corrections.json` | 人工确认的纠错候选 | 有证据且需语境判断，不做盲目全局替换 |
 | `data/channel_vocab.json` | 由以上两份生成的最小 runtime schema | 只保留脚本实际消费的字段 |
-| `data/writing-skills/*.md` | fresh clone 的自包含 writing-skill fallback | 同步 canonical skill 的核心契约，不依赖其本机 reference 路径 |
+| `data/writing-skills/*.md` | fresh clone 的自包含 writing-skill fallback | 同步对应 writing skill 的公开主文件／核心契约，不依赖其本机 reference 路径 |
 
 每次修改先找准确 owner。复制同一原则到 README、skill、prompt 和 data 会重新制造漂移。
