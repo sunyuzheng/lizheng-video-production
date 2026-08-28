@@ -7,7 +7,7 @@ generate_titles.py — 课代表立正播客标题三轮生成工作流 v4
   - 从本期不可替代的事实、机制、人物与受众 stakes 出发，不按标题类型填格子
   - 高光、标题与封面按当前平台共同判断，不维护永久的“不重复／不剧透”规则
   - Round 1 使用频道真实高播标题作外部样本，同时保留新内容超出历史样本的空间
-  - 三轮全程使用 Claude CLI（模型由 CLI 默认或环境变量选择），timeout 900s
+  - 三轮默认使用 Codex CLI，失败时降级 Claude；模型由 CLI 默认或环境变量选择
 
 用法：
   python3 tools/generate_titles.py episode.article.md        # 自动检测同目录 highlights
@@ -23,7 +23,7 @@ _REPO_ROOT = Path(__file__).parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from tools.claude_cli import DEFAULT_MODEL, call_claude_file_based
+from tools.content_cli import DEFAULT_CONTENT_MODEL, call_content_file_based
 from tools.asset_qc import raise_for_errors, validate_title_output
 from tools.srt_text import plain_text_from_srt
 
@@ -206,7 +206,7 @@ def run_round0(content: str, highlights: str, workspace: Path) -> Path:
         )
 
     print("    Round 0：理解内容 + 多角度生成候选…", flush=True)
-    call_claude_file_based(prompt, out, model=DEFAULT_MODEL)
+    call_content_file_based(prompt, out, model=DEFAULT_CONTENT_MODEL)
     print(f"    ✓ {out.name} 已写入")
     return out
 
@@ -232,7 +232,7 @@ def run_round1(round0: Path, highlights: str, workspace: Path) -> Path:
     )
 
     print("    Round 1：外部基准对比 + 差距诊断…", flush=True)
-    call_claude_file_based(prompt, out, model=DEFAULT_MODEL)
+    call_content_file_based(prompt, out, model=DEFAULT_CONTENT_MODEL)
     print(f"    ✓ {out.name} 已写入")
     return out
 
@@ -251,7 +251,7 @@ def run_round2(round0: Path, round1: Path, highlights: str, final_out: Path) -> 
     )
 
     print("    Round 2：补强 + 最终选题…", flush=True)
-    call_claude_file_based(prompt, final_out, model=DEFAULT_MODEL)
+    call_content_file_based(prompt, final_out, model=DEFAULT_CONTENT_MODEL)
     print(f"    ✓ {final_out.name} 已写入")
     return final_out
 

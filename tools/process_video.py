@@ -9,7 +9,7 @@ process_video.py v4 — 视频转录 + 字幕校对 + 高光 + 文章 + 标题 +
   3. 断句处理
   4. 提取视频高光候选（数量由材料决定，供编辑与标题流程使用）
   5. 生成频道风格文章
-  6. 生成播客标题（高光驱动，三轮 Claude CLI 工作流）
+  6. 生成播客标题（高光驱动，三轮 Codex-first 工作流）
   7. 生成 YouTube description（介绍 + 章节）
 
 用法：
@@ -44,7 +44,16 @@ CODEX_CORRECTION_MODEL = (
     or os.environ.get("LIZHENG_CODEX_MODEL")
     or None
 )
-CLAUDE_CONTENT_MODEL = os.environ.get("LIZHENG_CLAUDE_MODEL") or None
+CODEX_CONTENT_MODEL = (
+    os.environ.get("LIZHENG_CODEX_CONTENT_MODEL")
+    or os.environ.get("LIZHENG_CODEX_MODEL")
+    or None
+)
+CLAUDE_FALLBACK_MODEL = (
+    os.environ.get("LIZHENG_CLAUDE_FALLBACK_MODEL")
+    or os.environ.get("LIZHENG_CLAUDE_MODEL")
+    or None
+)
 _VOCAB_FILE = _ROOT / "data" / "channel_vocab.json"
 
 
@@ -520,7 +529,11 @@ def main():
     print(f"过程目录: {process_dir}")
     correction_model = args.model or "Codex CLI 默认配置"
     print(f"校对引擎: Codex CLI ({correction_model})")
-    print(f"高光/文章/标题模型: {CLAUDE_CONTENT_MODEL or 'Claude CLI 默认配置'}")
+    print(
+        "高光/文章/标题/description: "
+        f"Codex ({CODEX_CONTENT_MODEL or 'CLI 默认配置'}) → "
+        f"Claude fallback ({CLAUDE_FALLBACK_MODEL or 'CLI 默认配置'})"
+    )
     print(f"流程: 转录 → 校对 → 断句 → 高光 → 文章 → 标题 → YouTube description")
     print(f"{'='*55}")
 

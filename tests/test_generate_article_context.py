@@ -63,7 +63,7 @@ class GenerateArticleContextTests(unittest.TestCase):
                 return real_replace(source, destination)
 
             with (
-                patch("tools.generate_article.call_claude_file_based", fake_call),
+                patch("tools.generate_article.call_content_file_based", fake_call),
                 patch.object(
                     atomic_delivery,
                     "_replace_path",
@@ -317,7 +317,7 @@ class GenerateArticleContextTests(unittest.TestCase):
                 ),
                 patch.dict(os.environ, {}, clear=True),
                 patch("tools.generate_article.Path.home", return_value=root / "home"),
-                patch("tools.generate_article.call_claude_file_based", fake_call),
+                patch("tools.generate_article.call_content_file_based", fake_call),
             ):
                 generate_article(
                     srt_path,
@@ -383,7 +383,7 @@ class GenerateArticleContextTests(unittest.TestCase):
                 ),
                 patch.dict(os.environ, {}, clear=True),
                 patch("tools.generate_article.Path.home", return_value=root / "home"),
-                patch("tools.generate_article.call_claude_file_based", fake_call),
+                patch("tools.generate_article.call_content_file_based", fake_call),
             ):
                 generate_article(
                     srt_path,
@@ -428,7 +428,7 @@ class GenerateArticleContextTests(unittest.TestCase):
                 ),
                 patch.dict(os.environ, {}, clear=True),
                 patch("tools.generate_article.Path.home", return_value=root / "home"),
-                patch("tools.generate_article.call_claude_file_based", fake_call),
+                patch("tools.generate_article.call_content_file_based", fake_call),
             ):
                 result = generate_article(
                     srt_path,
@@ -476,7 +476,7 @@ class GenerateArticleContextTests(unittest.TestCase):
                 patch.dict(os.environ, {}, clear=True),
                 patch("tools.generate_article.Path.home", return_value=root / "home"),
                 patch(
-                    "tools.generate_article.call_claude_file_based",
+                    "tools.generate_article.call_content_file_based",
                     side_effect=RuntimeError("brief failed"),
                 ),
             ):

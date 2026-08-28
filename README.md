@@ -7,7 +7,7 @@
 | 能力 | 自动化等级 | 入口／依赖 |
 |---|---|---|
 | 本地 ASR、全文精校、重新断句、字幕 QC、VTT | 主流程自动 | `tools/process_video.py` |
-| 高光、文章、标题、YouTube description | 主流程按需生成；标题与 description 有格式门，高光与文章需编辑验收 | Claude CLI，失败时 Codex CLI fallback |
+| 高光、文章、标题、YouTube description | 主流程按需生成；标题与 description 有格式门，高光与文章需编辑验收 | Codex CLI，失败时 Claude CLI fallback |
 | 说话人区分与可选声纹映射 | 独立脚本 | pyannote + `ffmpeg` |
 | 口头禅／重复／假启动的非破坏性剪辑 | 独立脚本，edit plan 需先审核 | `tools/render_filler_cuts.py` + `ffmpeg` |
 | 双 WAV 漂移对齐、剪前导、社区版压制 | agent 制作 recipe，不是主脚本自动能力 | `ffmpeg`／`ffprobe` |
@@ -31,7 +31,7 @@ DESIGN.md    长期技术决策
 - Apple Silicon Mac；主 ASR 基于 MLX。
 - Python 3.10 或更高。说话人标注建议使用单独的 Python 3.11+ 环境。
 - `ffmpeg` 与 `ffprobe`。
-- 已安装并登录 Codex CLI；生成高光、文章、标题和 description 时还建议登录 Claude Code CLI。
+- 已安装并登录 Codex CLI。Claude Code CLI 是内容生成的可选 fallback，需要降级能力时再安装并登录。
 
 AI 文本步骤使用已登录 CLI，不直接读取云 API key。可选的 pyannote 模型需要 Hugging Face 账号授权。
 
@@ -47,7 +47,7 @@ venv/bin/pip install -r requirements.txt
 
 ffmpeg -version
 codex --version
-claude --version
+claude --version  # 可选 fallback
 ```
 
 如果系统 `python3` 低于 3.10，用已安装的具体版本创建 venv，例如 `/opt/homebrew/bin/python3.12 -m venv venv`。首次转写会下载 Qwen3-ASR 模型；下载大小与模型 revision、缓存状态有关，请预留充足磁盘空间。
@@ -249,7 +249,7 @@ python3 -m compileall -q tools tests
 python3 tools/process_video.py --help
 ```
 
-单元测试覆盖文件契约、失败语义、字幕重切/QC、模型 CLI 封装与文章 context。它们不替代真实的 ASR 下载、Claude／Codex 登录、pyannote、ffmpeg 全片解码或平台上传测试。
+单元测试覆盖文件契约、失败语义、字幕重切/QC、模型 CLI 封装与文章 context。它们不替代真实的 ASR 下载、Codex／Claude 登录、pyannote、ffmpeg 全片解码或平台上传测试。
 
 ## 常见问题
 
@@ -259,6 +259,6 @@ python3 tools/process_video.py --help
 
 **为什么没有 VTT？** 查看 `<video>_process/<video>.subtitle_qc.md`；QC 未通过时不会晋升 VTT。
 
-**Claude 不可用？** 内容步骤会显式报告并使用 Codex fallback。模型选择由 CLI 当前配置或环境变量控制，不在 README 固定一个会过期的版本名。
+**Codex 不可用？** 内容步骤会显式报告并尝试 Claude fallback；两者都不可用时失败，不把旧文件冒充本次结果。Codex 内容模型可用 `LIZHENG_CODEX_CONTENT_MODEL`（或通用的 `LIZHENG_CODEX_MODEL`）覆盖，Claude fallback 可用 `LIZHENG_CLAUDE_FALLBACK_MODEL`（或 `LIZHENG_CLAUDE_MODEL`）覆盖；不设置时使用各自 CLI 当前默认。
 
 **为什么 fresh clone 没有小红书专用 skill 或 Canva？** 它们是可选外部能力。核心脚本自包含；外部能力可用时由 `lizheng-video-editing` 编排，不把个人机器路径写成仓库依赖。

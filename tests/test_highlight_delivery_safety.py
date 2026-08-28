@@ -20,7 +20,7 @@ class HighlightDeliverySafetyTests(unittest.TestCase):
             output.write_text("known-good", encoding="utf-8")
 
             with patch(
-                "tools.generate_highlights.call_claude_file_based",
+                "tools.generate_highlights.call_content_file_based",
                 side_effect=RuntimeError("both model CLIs failed"),
             ):
                 with self.assertRaisesRegex(RuntimeError, "both model CLIs failed"):

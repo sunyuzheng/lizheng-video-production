@@ -20,7 +20,7 @@ _REPO_ROOT = Path(__file__).parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from tools.claude_cli import DEFAULT_MODEL, call_claude_file_based
+from tools.content_cli import DEFAULT_CONTENT_MODEL, call_content_file_based
 from tools.speaker_sidecar import load_validated_speaker_srt
 from tools.srt_text import timed_text_from_srt
 from tools.subtitle_qc import parse_srt
@@ -237,7 +237,7 @@ def generate_highlights(
         prompt = HIGHLIGHTS_FROM_SCAN.format(guideline=guideline, content=content)
 
     print("    高光分析中…", flush=True)
-    call_claude_file_based(prompt, candidate_path, model=DEFAULT_MODEL)
+    call_content_file_based(prompt, candidate_path, model=DEFAULT_CONTENT_MODEL)
     if not candidate_path.read_text(encoding="utf-8").strip():
         raise RuntimeError("高光模型返回空内容")
     candidate_path.replace(output_path)

@@ -30,7 +30,7 @@ SRT/VTT、article/brief/context/writing-skill 快照、以及清理版视频/重
 
 ## 5. 模型调用使用最小权限
 
-文本生成不需要让模型读取任意工作区或调用 shell。Claude 以无工具、安全、无持久会话模式接收 prompt，Python 捕获 stdout 并写入目标文件。Codex fallback 使用临时空工作区、只读 sandbox、ephemeral session，并忽略用户工具配置；不让内容生成步骤获得不必要的项目读取或外部写权限。
+文本生成不需要让模型读取任意工作区或调用 shell。Codex 是内容资产的默认引擎：它在临时空工作区、只读 sandbox、ephemeral session 中运行，并忽略用户工具配置。Codex 失败时，Claude fallback 以无工具、安全、无持久会话模式接收同一 prompt。两条路径都由 Python 控制最终输出文件，不让内容生成步骤获得不必要的项目读取或外部写权限。
 
 具体模型名称属于运行配置而不是文档事实。脚本允许环境变量或 CLI 显式覆盖，并尽量使用已登录 CLI 的当前默认，避免 README 因模型版本变化而漂移。
 

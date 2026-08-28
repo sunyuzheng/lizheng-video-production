@@ -14,7 +14,7 @@ _REPO_ROOT = Path(__file__).parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from tools.claude_cli import DEFAULT_MODEL, call_claude_file_based
+from tools.content_cli import DEFAULT_CONTENT_MODEL, call_content_file_based
 from tools.asset_qc import raise_for_errors, validate_youtube_description
 from tools.srt_text import timed_text_from_srt
 
@@ -68,7 +68,7 @@ def generate_youtube_description(
     candidate_path.unlink(missing_ok=True)
     transcript = srt_to_timed_text(srt_path)
     prompt = PROMPT.format(transcript=transcript)
-    call_claude_file_based(prompt, candidate_path, model=DEFAULT_MODEL)
+    call_content_file_based(prompt, candidate_path, model=DEFAULT_CONTENT_MODEL)
     candidate_text = candidate_path.read_text(encoding="utf-8")
     errors = validate_youtube_description(candidate_text, srt_path)
     if errors:

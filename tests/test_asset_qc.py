@@ -69,7 +69,7 @@ class YoutubeDescriptionQcTests(unittest.TestCase):
                 )
 
             with patch(
-                "tools.generate_youtube_description.call_claude_file_based",
+                "tools.generate_youtube_description.call_content_file_based",
                 side_effect=fake_call,
             ):
                 with self.assertRaises(AssetValidationError):

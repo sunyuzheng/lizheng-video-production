@@ -28,7 +28,7 @@ _REPO_ROOT = Path(__file__).parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from tools.claude_cli import DEFAULT_MODEL, call_claude_file_based
+from tools.content_cli import DEFAULT_CONTENT_MODEL, call_content_file_based
 from tools.atomic_delivery import commit_prepared_files
 from tools.speaker_sidecar import load_validated_speaker_srt
 from tools.srt_text import timed_text_from_srt
@@ -503,10 +503,10 @@ def generate_article(
 
     try:
         attempt_snapshot_path.write_text(writing_skill.content, encoding="utf-8")
-        call_claude_file_based(
+        call_content_file_based(
             brief_prompt,
             attempt_brief_path,
-            model=DEFAULT_MODEL,
+            model=DEFAULT_CONTENT_MODEL,
         )
         article_brief = attempt_brief_path.read_text(encoding="utf-8")
 
@@ -528,10 +528,10 @@ def generate_article(
             + source_context
         )
 
-        call_claude_file_based(
+        call_content_file_based(
             prompt,
             attempt_output_path,
-            model=DEFAULT_MODEL,
+            model=DEFAULT_CONTENT_MODEL,
         )
         attempt_context_path.write_text(
             json.dumps(
