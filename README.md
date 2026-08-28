@@ -7,7 +7,7 @@
 ├── skill/SKILL.md        ← 工作流权威定义：判型、三区、流水线、交付物、验收、持续校准
 ├── skill/references/     ← 来源与布局说明
 ├── tools/                ← 流水线脚本（转写、精校、断句、高光、文章、标题）
-├── data/                 ← 资料区：频道 guideline、高播标题基准、术语库
+├── data/                 ← 资料区：频道基准、术语库、writing skill fallback
 └── README.md             ← 本文件：仓库代码怎么跑
 ```
 
@@ -17,7 +17,7 @@
 
 ## 工作流总览
 
-第 0 步先**判型**：单口（口播）还是访谈，决定后面所有分流——文章形态（外发独立稿 vs 视频伴读稿）、高光数量（3-4 段 vs 6-8 段）、封面图（默认不做 vs 默认做）。判型由脚本从字幕内容自动完成。
+第 0 步先**判型**：单口（口播）还是访谈，决定后面所有分流——文章主责 skill、高光数量和封面图。文章阶段可用 `--article-type` 显式指定；`auto` 只在 speaker labels、当期嘉宾资料或 highlights 含有明确类型标记时采用，信号不足会要求显式输入，不凭字幕主题猜。高光仍按自己的观众感流程判型。
 
 | 步骤 | 内容 | 输出文件 | 引擎 |
 |------|------|---------|------|
@@ -26,7 +26,7 @@
 | 3. 断句 + QC | **先合并再重切**：跨越 ASR 坏 cue 边界，不拆拉丁词；检查字数、时长、重叠、阅读速度并导出 VTT | `.final.srt` `.final.vtt` | 本地规则，无需 API |
 | 4. 说话人标注（访谈可选） | 本地 pyannote diarization；可选已知声纹匹配；生成 speaker-labeled transcript | `.speaker_labeled.srt/.md` | 本地模型 |
 | 5. 高光 | 独立的观众感模块：时间戳 + 原话 + cognitive gap + 叙事弧 + 剪辑组合 | `.highlights.md` | Claude Code CLI |
-| 6. 文章 | 按判型分流；自动读取高光做跳转地图；禁元叙述和空转总结 | `.article.md` | Claude Code CLI |
+| 6. 文章 | 按类型只加载一个主责 writing skill；高光用于证据定位，形态由发布 surface 决定 | `.article.md` + 工作区 brief/context | Claude Code CLI |
 | 7. 标题 | 三轮工作流，以频道真实高播标题为外部基准；终审置顶、无内部代号 | `.titles.md` | Claude Code CLI |
 | 8. YouTube description | 平实介绍 + 可复制的 mm:ss 章节，从 00:00 开始 | `.youtube-description.txt` | Claude Code CLI |
 | 9. Google Doc 交付（可选） | 把嘉宾可看内容、文章、高光、标题封面、发布文案、归因说明分 tab 整合 | Google Doc URL | Google Drive/Docs connector |
@@ -97,6 +97,13 @@ venv-diarization/bin/hf auth login
 caffeinate -i venv/bin/python tools/process_video.py /path/to/视频.mp4 --seeds 嘉宾名 公司名 产品名
 ```
 
+访谈若要生成独立社区帖而非随视频伴读，显式指定文章契约：
+
+```bash
+caffeinate -i venv/bin/python tools/process_video.py /path/to/视频.mp4 \
+  --article-type interview --article-surface community --seeds 嘉宾名 公司名
+```
+
 `caffeinate -i` 防止长视频跑到一半 Mac 休眠。没有专有名词时用 `--no-seeds`。
 
 **seeds 的双重作用**：注入 ASR 提高专有名词准确率；同时是小红书路线的「主人公背景」原料（身份词要带具体数字）。**单期实体（嘉宾公司名、产品名）只走 seeds，不进 `data/channel_vocab.json`**——词库只收频道级多期复用的术语。
@@ -105,12 +112,13 @@ caffeinate -i venv/bin/python tools/process_video.py /path/to/视频.mp4 --seeds
 
 ```bash
 venv/bin/python tools/generate_highlights.py /path/to/视频名.final.srt -o /path/to/video-dir
-venv/bin/python tools/generate_article.py    /path/to/视频名.final.srt -o /path/to/video-dir
+venv/bin/python tools/generate_article.py    /path/to/视频名.final.srt -o /path/to/video-dir \
+  --article-type interview --surface companion
 venv/bin/python tools/generate_titles.py     /path/to/视频名.article.md -o /path/to/video-dir --workspace-dir /path/to/视频名_process
 venv/bin/python tools/generate_youtube_description.py /path/to/视频名.final.srt -o /path/to/video-dir
 ```
 
-顺序必须**先高光后文章**——`generate_article.py` 会自动读取同目录的 `highlights.md` 做选题、时间戳和原话线索。
+顺序默认**先高光后文章**——`generate_article.py` 会把本次新生成的 `highlights.md` 作为选题、时间戳和原话线索；它不自动把高光顺序变成文章结构。单独运行时可用 `--highlights /path/to/本期.highlights.md` 消除自动搜索的歧义。
 
 ### 访谈说话人标注（可选）
 
@@ -187,6 +195,9 @@ venv-diarization/bin/python tools/speaker_attribution.py \
 | `--skip-article` | 跳过文章生成 |
 | `--skip-titles` | 跳过标题生成 |
 | `--skip-youtube-description` | 跳过 YouTube description 生成 |
+| `--article-type auto\|interview\|monologue` | 文章素材类型；`auto` 只采用可追溯的明确类型信号 |
+| `--article-surface auto\|article\|community\|companion\|release` | 全链路文章形态；`auto` 为访谈伴读、单口独立文章 |
+| `--article-writing-skill PATH` | 固定使用某份 writing skill 或此前保存的本期快照 |
 | `--process-dir DIR` | 指定过程文件目录（默认 `视频名_process/`） |
 | `--max-chars N` | 每条字幕最大字数（默认 20） |
 
@@ -202,7 +213,7 @@ venv-diarization/bin/python tools/speaker_attribution.py \
 | `视频名.speaker_labeled.srt` | 带说话人前缀的字幕 | 访谈归因校验 / 二次内容生成 |
 | `视频名.speaker_labeled.md` | 按说话人 turn 合并的阅读稿 | 高光、文章、标题的访谈输入 |
 | `视频名.highlights.md` | 高光候选 + 叙事弧 + 推荐剪辑组合 | 剪辑跳转 + 标题原料 |
-| `视频名.article.md` | 单口外发稿 / 访谈伴读稿（按判型） | 发布 / 归档 |
+| `视频名.article.md` | 单口外发稿，或按 surface 生成的访谈文章／社区帖／伴读／发布介绍 | 发布 / 归档 |
 | `视频名.titles.md` | 终审标题（标字数）+ 封面建议 + 备选 | **取标题用这个** |
 | `视频名.youtube-description.txt` | YouTube 介绍 + 简洁章节（mm:ss，从 00:00 开始） | 复制到 YouTube description |
 | `视频名.xhs.md` | 小红书封面+标题方案（发小红书时生成） | 小红书发布 |
@@ -211,7 +222,7 @@ venv-diarization/bin/python tools/speaker_attribution.py \
 | `视频名.cover-4x3.png` | 4:3 带字封面图 | B站 / 抖音 / 视频号 |
 | Google Doc URL | 分 tab 汇总嘉宾预览、文章、高光、标题封面、发布文案、归因说明 | 嘉宾审阅 / 团队交接 |
 
-**工作区** = `视频名_process/`：`*.qwen.srt`（原始转录，永不覆盖）、`*.corrected.srt`（精校稿）、`*_title_ws/`（标题轮次中间文件）。过程文件不当交付。
+**工作区** = `视频名_process/`：`*.qwen.srt`（原始转录，永不覆盖）、`*.corrected.srt`（精校稿）、`*.article-context.json`（本次类型、surface、writing skill 来源和 hash）、`*.writing-skill.md`（本次实际 prompt 快照）、`*.article-brief.md`（待复核的编辑判断）、当期 `*.editorial-notes.md`，以及 `*_title_ws/`。过程文件不当交付。
 
 **资料区** = 本仓库 `data/` + `xhs-cover-title` skill 的词库样本库。只读引用，更新走「持续校准」（见 `skill/SKILL.md`）。
 
@@ -229,14 +240,17 @@ ASR 的原始 cue 边界经常落在词中间（「…这是你的事 / 情当�
 
 ### 文章口吻（`generate_article.py`）
 
-像主播本人状态最好时写出的版本，不是 AI 观点包装。核心编辑原则：
+脚本根据 `--article-type` 只读取一个主责 skill：访谈使用 `expert-interview-article`，单口使用 `substance-writing-review`。它优先读取本机 `~/.codex/skills/` 或 `~/.claude/skills/` 中的当前版本，也可用 `LIZHENG_WRITING_SKILLS_DIR` 指向另一套 skill 根目录；fresh clone 没有这些 skill 时使用 `data/writing-skills/` 的自包含版本化 fallback。实际采用的内容会保存为 `<video>.writing-skill.md`，来源、原路径、快照路径和 SHA-256 写进 article context。要精确重放时，把该快照传给 `--writing-skill`（单独脚本）或 `--article-writing-skill`（全链路）。
 
-- **让内容先出现**：优先给事实、定义、原话和推理，让材料自己产生分量；编辑评价只有在增加理解时才保留
-- **让总结有对象**：与其说「每一个都被重新定义过」，不如把定义及其意义写出来
-- **保护自然节奏**：留意统一排比、连续硬转折和生造概念有没有压平作者的语气；保留具体案例、第一人称判断和推理来路
-- **真实读者**：从能力、阶段和缺口理解读者，让具体的人认出自己的处境，而不是用产品类型拼出泛人群
-- **智识保真**：遇到成熟框架，先理解其原名、顺序、定义、例子和关系；编辑表达应让它更可见，而不是把它换成更熟悉也更贫乏的包装
-- **有重心、有纹理**：用 Substance、Voice、Reader 三种视角重读；允许结构不均匀、语言有风险，不用硬规则把文章磨成平均答案
+`article`、`community`、`companion`、`release` 分别对应独立文章、独立社区帖、视频伴读／活动回放和短发布介绍。时间戳始终用于证据定位；只有 `companion` 默认把它们写成观看导航。
+
+若采访者在回看后有额外观察，把它写进 `<video>_process/<video>.editorial-notes.md`。第一轮 brief 会把这些观察当作待验证假设，记录跨段证据、反证和人物反应；第二轮正文仍以逐字稿、speaker labels 与有来源的嘉宾资料为事实源，冲突时丢弃 brief 中的说法。
+
+成稿的目标是像主播本人状态最好时写出的版本，不是 AI 观点包装。主责 skill 与 `skill/references/article-editorial-principles.md` 共同提醒编辑：
+
+- 让事实、定义、原话和推理先出现，编辑评价只在增加理解时保留。
+- 从能力、阶段和缺口理解真实读者；遇到成熟框架，保住它的原名、顺序、定义、例子和内部关系。
+- 以 Substance、Voice、Reader 三个视角重读；结构可以不均匀，不用硬规则把文章磨成平均答案。
 
 ### 高光检测（`generate_highlights.py`）
 
@@ -276,7 +290,7 @@ ASR 的原始 cue 边界经常落在词中间（「…这是你的事 / 情当�
 | `tools/build_speaker_refs.py` | 从单人音视频中抽取本地 speaker reference clips（可选） |
 | `tools/speaker_attribution.py` | 本地 pyannote diarization + 可选声纹匹配，生成 speaker-labeled SRT/MD（可选） |
 | `tools/generate_highlights.py` | 高光提取，自动判型单口/访谈（可单独调用） |
-| `tools/generate_article.py` | 文章生成，按判型分流、自动吃高光（可单独调用） |
+| `tools/generate_article.py` | 文章生成，按类型/surface 路由 writing skill，并记录 brief/context（可单独调用） |
 | `tools/generate_titles.py` | 标题三轮工作流（可单独调用） |
 | `tools/generate_youtube_description.py` | YouTube description + 章节生成（可单独调用） |
 

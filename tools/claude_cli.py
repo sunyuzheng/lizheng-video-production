@@ -68,6 +68,8 @@ def _call_claude_once(
     timeout: int,
 ) -> str:
     """单次 Claude 调用：prompt 写临时文件，让 Claude 把完整输出写入 output_path。"""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.unlink(missing_ok=True)
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".md", delete=False,
         encoding="utf-8", prefix="kdb_task_",

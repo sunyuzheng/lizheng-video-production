@@ -15,6 +15,12 @@ Skill 与实现合并在同一个仓库：
 
 ## Supporting
 
+- `data/writing-skills/expert-interview-article.md`
+  - 访谈文章主责 skill 的自包含版本化 fallback；运行时优先采用本机安装的当前版本
+- `data/writing-skills/substance-writing-review.md`
+  - 单口文章主责 skill 的自包含版本化 fallback；运行时优先采用本机安装的当前版本
+- `~/.codex/skills/<skill>/SKILL.md`、`~/.claude/skills/<skill>/SKILL.md`
+  - 运行时可选的当前版本；实际内容另存本期快照，来源与 SHA-256 写入 article context
 - `/Users/sunyuzheng/Desktop/AI/context-infrastructure/rules/skills/workflow_kdb_video_brief.md`
   - Useful when post-production feeds into topic or brief generation
 - `/Users/sunyuzheng/Desktop/AI/skills/xhs-cover-title/`

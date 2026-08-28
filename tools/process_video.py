@@ -285,13 +285,31 @@ def validate_and_export_subtitles(
     return True
 
 
-def article(final_srt: Path, output_dir: Path, stem: str) -> Path | None:
+def article(
+    final_srt: Path,
+    output_dir: Path,
+    workspace_dir: Path,
+    stem: str,
+    article_type: str,
+    surface: str,
+    highlights_path: Path | None = None,
+    writing_skill_path: Path | None = None,
+) -> Path | None:
     sys.path.insert(0, str(_TOOLS))
     from generate_article import generate_article
     t0 = time.time()
     print(f"  生成文章…", flush=True)
     try:
-        result = generate_article(final_srt, output_dir=output_dir, stem=stem)
+        result = generate_article(
+            final_srt,
+            output_dir=output_dir,
+            workspace_dir=workspace_dir,
+            stem=stem,
+            article_type=article_type,
+            surface=surface,
+            highlights_path=highlights_path,
+            writing_skill_path=writing_skill_path,
+        )
         elapsed = time.time() - t0
         print(f"  ✓ 文章完成  {elapsed:.0f}s  → {result.name}")
         return result
@@ -363,6 +381,23 @@ def main():
                         help="跳过标题生成")
     parser.add_argument("--skip-youtube-description", action="store_true",
                         help="跳过 YouTube description 生成")
+    parser.add_argument(
+        "--article-type",
+        choices=("auto", "interview", "monologue"),
+        default="auto",
+        help="文章素材类型；auto 从 speaker/profile/highlights 判型",
+    )
+    parser.add_argument(
+        "--article-surface",
+        choices=("auto", "article", "community", "companion", "release"),
+        default="auto",
+        help="文章发布形态；auto=访谈伴读、单口独立文章",
+    )
+    parser.add_argument(
+        "--article-writing-skill",
+        default=None,
+        help="显式指定 writing skill 或此前保存的快照，用于固定/重放同一 prompt",
+    )
     parser.add_argument("--seeds", nargs="*", default=None,
                         help="本期嘉宾/术语（跳过交互式询问）")
     parser.add_argument("--no-seeds", action="store_true",
@@ -533,7 +568,20 @@ def main():
         print(f"\n[5/7] 生成频道风格文章")
         src = final_srt or corrected_srt or qwen_srt
         if src and src.exists():
-            article_path = article(src, output_dir=delivery_dir, stem=stem)
+            article_path = article(
+                src,
+                output_dir=delivery_dir,
+                workspace_dir=process_dir,
+                stem=stem,
+                article_type=args.article_type,
+                surface=args.article_surface,
+                highlights_path=highlights_path,
+                writing_skill_path=(
+                    Path(args.article_writing_skill).resolve()
+                    if args.article_writing_skill
+                    else None
+                ),
+            )
             if not article_path:
                 failures.append("[5/7] 文章生成")
         else:

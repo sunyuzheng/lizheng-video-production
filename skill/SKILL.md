@@ -1,6 +1,6 @@
 ---
 name: kdb-video-post-production
-description: 给定视频、独立录音或已有字幕，完成双录音漂移对齐、剪前导、社区版压制、本地转写、字幕精校/VTT/QC，并按单口或访谈分流产出高光、伴读文章、标题、YouTube description、封面和 Circle 活动回放帖子草稿；需要嘉宾审阅或团队交接时可追加分 tab Google Doc。转写用 mlx-qwen3-asr 1.7B，精校用 Codex CLI，内容生成默认 Claude Code Fable 5、不可用时降级 Codex gpt-5.5。
+description: 给定视频、独立录音或已有字幕，完成双录音漂移对齐、剪前导、社区版压制、本地转写、字幕精校/VTT/QC，并按类型与发布 surface 产出高光、文章、标题、YouTube description、封面和 Circle 草稿；访谈文章由 expert-interview-article 主责，单口文章由 substance-writing-review 主责。需要嘉宾审阅或团队交接时可追加分 tab Google Doc。转写用 mlx-qwen3-asr 1.7B，精校用 Codex CLI，内容生成默认 Claude Code Fable 5、不可用时降级 Codex gpt-5.5。
 ---
 
 # KDB 视频后期生产 v3
@@ -19,8 +19,8 @@ description: 给定视频、独立录音或已有字幕，完成双录音漂移�
 
 | | 单口 | 访谈 |
 |---|---|---|
-| 文章形态 | 外发独立文章，像主播状态最好时自己写的 | 视频伴读/观看地图，如实还原对话 |
-| 文章去处 | Twitter / LinkedIn / Superlinear 站点 | 随视频发布，给观众当观看指引 |
+| 文章形态 | 默认外发独立文章，像主播状态最好时自己写的 | 由发布 surface 决定；随视频发布时默认伴读，也可写独立文章、社区帖或发布介绍 |
+| 文章去处 | Twitter / LinkedIn / Superlinear 站点 | 社区、站点或随视频发布 |
 | 高光 | 3-4 段核心论断 | 6-8 段，覆盖嘉宾不同侧面 |
 | 封面图 | 默认不做 | 默认做三种带字比例 |
 
@@ -124,22 +124,27 @@ venv-diarization/bin/python tools/speaker_attribution.py /path/to/video.mp4 \
 
 ## 第 2 步：高光（独立模块，观众感）
 
-**高光不是文章的选段。** 视频观众的注意力逻辑和文章读者不同——什么能让人停下、什么能让人跳转，要按观看行为判断，所以高光单独成模块，先于文章跑，产物供两个下游使用：文章的跳转地图 + 标题/小红书的金句原料。
+**高光不是文章的选段。** 视频观众的注意力逻辑和文章读者不同——什么能让人停下、什么能让人跳转，要按观看行为判断，所以高光单独成模块，先于文章跑，产物供两个下游使用：文章的证据与定位线索 + 标题/小红书的金句原料。
 
 - 入口：`venv/bin/python tools/generate_highlights.py /path/to/video.final.srt`。脚本会优先采用 SRT 末尾编辑者亲选的高光段（权威来源），没有才全文扫描。
 - 每段高光必须有：可跳转时间戳、原话引用、cognitive gap、为什么值得跳转观看、在整期主线中的位置；访谈另加 vantage point。
 - 不只选戏剧性片段，也要选支撑主线的关键解释、人物选择和反常识判断。
 
-## 第 3 步：文章（按型分流）
+## 第 3 步：文章（一个主责 skill + 明确 surface）
 
-入口：`venv/bin/python tools/generate_article.py /path/to/video.final.srt`。动笔前完整读取 `references/article-editorial-principles.md`。它不是禁句表，而是帮助编辑先理解真实读者、主线、证据，以及素材中已有的智识结构。脚本内置两种文章形态和 `substance-writing-review` 的判断框架；agent 仍需对成稿作编辑判断，不能把 prompt 当成质量保证。
+视频 skill 负责组织上游素材；写作阶段只交给一个主责 skill：单口用 `substance-writing-review`，访谈用 `expert-interview-article`。运行时只加载选中的一套 skill，不把两套规范叠加在同一篇稿上。优先采用本机安装的当前 skill；仓内 `data/writing-skills/` 保留自包含的版本化 fallback。每次把实际采用的 skill 原文保存到本期工作区，并把来源、快照路径和 hash 写入 article context；需要复现时显式传回这份快照。
 
-**文章参考高光**：脚本会自动读取同目录的 `highlights.md`，作为选题、时间戳和原话线索——所以必须先跑高光再跑文章（`process_video.py` 已按此顺序；单独跑脚本时自己保证顺序）。
+`references/article-editorial-principles.md` 是与主责 writing skill 配合使用的编辑参考，帮助理解真实读者、主线、证据和材料已有的智识结构；它不是第二套写作规范，也不是禁句表。agent 仍需对成稿作编辑判断，不能把 prompt 当成质量保证。
 
-- **单口稿**：像主播本人状态最好时写出的版本——更清楚、更锋利，但不是另一个人写的。不套模板、不改成营销号/AI 总结/咨询报告。发布目标是 Twitter/LinkedIn/Superlinear；如需平台变体（thread 拆分、英文版），在文章定稿后按用户要求另做，不默认生成。
-- **访谈稿**：视频伴读，不是摘要。通常从事实或现场进入，用一条有重心的主线组织原话、解释和启发；观看地图负责承接没有进入正文的内容。真实读者要从能力、阶段和缺口来理解，而不是用产品类型拼出来。Daniel Priestley 的 5P 等成熟框架应先被完整理解，编辑表达要让其原名、顺序、定义、例子和内部关系更清楚，而不是用更熟悉的包装将它写薄。第一人称只承接真实经历；严格区分主持人和嘉宾的判断。
+入口：`venv/bin/python tools/generate_article.py /path/to/video.final.srt --article-type interview --surface companion`。脚本先写 `<video>_process/<video>.article-context.json` 和 `<video>.article-brief.md`，再写 `<video>.article.md`。`process_video.py` 会把本次生成的 highlights 路径显式传给文章步骤，避免工作区旧文件覆盖新结果；单独运行时也应先准备本期高光文件，必要时用 `--highlights` 指定，或显式指定类型。
 
-定稿时以 Substance、Voice、Reader 三个视角重读。它们是帮助编辑提高分辨率的原则，不是逐项打勾的硬门：文章可以有锋芒、停顿、不均匀和风险，只要这些选择来自材料，并让读者理解得更准确。
+`--surface` 是产物契约：`article`=独立文章，`community`=不依赖视频的社区帖，`companion`=带观看导航的视频伴读／活动回放，`release`=较短发布介绍。`auto` 对访谈采用 `companion`、对单口采用 `article`。只有 `companion` 默认要求在成稿提供时间戳导航。
+
+article brief 的任务是记录编辑判断，不是替正文预制时间线目录。长而散的访谈中，真正的主线可能分散在几次追问、相隔很远的行为和嘉宾的后续修正里。brief 把这种观察当作待验证假设，记录 supporting timestamps、相关反证、人物如何回应，以及采用／放弃后的准确措辞。高光与时间戳负责定位证据，不自动成为文章脊椎。
+
+文章附加资料一律带本期 stem，避免共用目录时串集：嘉宾资料使用 `<video>.guest-profile.md`，采访者观察、人物判断或发布意图使用 `<video>_process/<video>.editorial-notes.md`。脚本不会把观察自动当成事实；第二轮正文仍要回到逐字稿、speaker labels 与有来源的嘉宾资料逐项复核 brief，冲突时丢弃 brief 中的说法。
+
+单口稿要像主播本人状态最好时写出的版本；访谈稿要让人看懂主线、原话与人物选择，而不是做话题摘要。嘉宾带来成熟框架时，保留它的原名、顺序、定义、例子和内部关系。定稿时用 Substance、Voice、Reader 三个视角提高分辨率，不把它们当成逐项打勾的硬门；文章可以有锋芒、停顿和不均匀，只要这些选择来自材料，并让读者理解得更准确。
 
 ## 第 4 步：标题（钩子工程，两条路线）
 
@@ -226,6 +231,7 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md
 | `<video>_process/*.diarization.rttm` `*.speaker_turns.json` `*.speaker_map.json` `*.speaker_qc.md` | 跑说话人标注时 | speaker_attribution.py |
 | `<video>_process/*.qwen.srt` `*.corrected.srt` | 总是（工作区） | 脚本流水线 |
 | `<video>.highlights.md` | 视频/访谈发布 | generate_highlights.py |
+| `<video>_process/<video>.article-context.json` / `<video>.writing-skill.md` / `<video>.article-brief.md` | 生成文章时 | generate_article.py |
 | `<video>.article.md` | 发布文章时 | generate_article.py |
 | `<video>.titles.md` | 频道发布 | generate_titles.py |
 | `<video>.youtube-description.txt` | YouTube 发布 | generate_youtube_description.py |
@@ -248,7 +254,9 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md
 - Circle 社区版不超过平台硬限制并留出余量；ffprobe 规格正确，全片 decode 无错误；草稿未被误发布。
 - 专有名词、数字、日期、工具名全链路一致；字幕断句适合上屏，无 ASR 原始长块。
 - 所有下游内容（高光/文章/标题/小红书）都基于 `.final.srt`，不直接依赖 raw ASR。
-- 文章形态与判型一致：单口=独立外发稿，访谈=伴读稿；嘉宾判断没有被写成主播判断。
+- 文章形态与 surface 一致；嘉宾判断没有被写成主播判断。
+- 访谈 brief 不只是话题清单：若成稿提出跨段判断，能定位到多个支撑片段、相关反证和人物反应，措辞没有超过这些证据。
+- `<video>.article-context.json` 记录实际采用的单口／访谈类型、surface、highlights 路径，以及主责 writing skill 的来源、快照路径和 hash；快照可重放，执行 prompt 只加载一个主责 writing skill。
 - 如果有 `.speaker_labeled.md`：访谈文章/高光按 speaker label 写归因；`UNKNOWN` / `MIXED` 不强行归到任何人。
 - `.xhs.md` 通过 xhs-cover-title 自带的自检清单（≤20 字、零 emoji、封面标题不重复等）。
 - `.youtube-description.txt` 可直接复制到 YouTube：介绍平实、有钩子；章节从 `00:00` 开始；时间戳为 `mm:ss` 且对应字幕真实段落。
