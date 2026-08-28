@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-generate_highlights.py — 从 SRT 逐字稿提取高光片段 v2
+generate_highlights.py — 从 SRT 逐字稿提取高光片段 v3
 
 核心逻辑：
   1. 优先检测 SRT 末尾追加的真实高光字幕（00:00:xx 时间戳，编辑者亲手选定）
@@ -13,7 +13,6 @@ generate_highlights.py — 从 SRT 逐字稿提取高光片段 v2
 """
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
@@ -22,6 +21,9 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from tools.claude_cli import DEFAULT_MODEL, call_claude_file_based
+from tools.speaker_sidecar import load_validated_speaker_srt
+from tools.srt_text import timed_text_from_srt
+from tools.subtitle_qc import parse_srt
 
 _REPO_DATA = Path(__file__).parent.parent / "data"
 _GUIDELINE = _REPO_DATA / "guideline_kedaibiao.md"
@@ -35,78 +37,17 @@ def load_guideline() -> str:
 
 # ── SRT 解析工具 ───────────────────────────────────────────────────────────────
 
-def srt_to_text(srt_path: Path) -> str:
-    """提取 SRT 全文纯文本"""
-    content = srt_path.read_text(encoding="utf-8")
-    lines = []
-    for line in content.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if re.match(r"^\d+$", line):
-            continue
-        if re.match(r"^\d{2}:\d{2}:\d{2}[,\.]\d{3}\s*-->", line):
-            continue
-        lines.append(line)
-    return " ".join(lines)
-
-
-def _format_timestamp(seconds: int) -> str:
-    hours = seconds // 3600
-    minutes = (seconds % 3600) // 60
+def _format_exact_timestamp(seconds: int) -> str:
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
     if hours:
-        return f"{hours:02d}:{minutes:02d}"
-    return f"{minutes:02d}:00"
-
-
-def _parse_start_seconds(time_line: str) -> int | None:
-    match = re.match(
-        r"^(\d{2}):(\d{2}):(\d{2})[,\.]\d{3}\s*-->",
-        time_line.strip(),
-    )
-    if not match:
-        return None
-    hours, minutes, seconds = (int(part) for part in match.groups())
-    return hours * 3600 + minutes * 60 + seconds
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
 
 
 def srt_to_timed_text(srt_path: Path, window_seconds: int = 60) -> str:
     """提取 SRT 文本，并按时间窗口合并，保留高光定位需要的粗时间戳。"""
-    content = srt_path.read_text(encoding="utf-8")
-    buckets: dict[int, list[str]] = {}
-    current_start: int | None = None
-    current_lines: list[str] = []
-
-    def flush_current() -> None:
-        nonlocal current_start, current_lines
-        if current_start is None or not current_lines:
-            current_start = None
-            current_lines = []
-            return
-        bucket_start = (current_start // window_seconds) * window_seconds
-        buckets.setdefault(bucket_start, []).append("".join(current_lines))
-        current_start = None
-        current_lines = []
-
-    for raw_line in content.splitlines():
-        line = raw_line.strip()
-        if not line:
-            flush_current()
-            continue
-        if re.match(r"^\d+$", line):
-            continue
-        start_seconds = _parse_start_seconds(line)
-        if start_seconds is not None:
-            flush_current()
-            current_start = start_seconds
-            continue
-        current_lines.append(line)
-    flush_current()
-
-    return "\n".join(
-        f"[{_format_timestamp(start)}] {' '.join(texts)}"
-        for start, texts in sorted(buckets.items())
-    )
+    return timed_text_from_srt(srt_path, window_seconds=window_seconds)
 
 
 def extract_appended_highlights(srt_path: Path) -> str:
@@ -118,38 +59,29 @@ def extract_appended_highlights(srt_path: Path) -> str:
 
     返回高光文本，或空字符串（未检测到）。
     """
-    content = srt_path.read_text(encoding="utf-8")
-    lines = content.splitlines()
-
+    cues = parse_srt(srt_path)
     appended_start = -1
     seen_main_content = False
-    for i, line in enumerate(lines):
-        start_seconds = _parse_start_seconds(line)
-        if start_seconds is None:
-            continue
+    for i, cue in enumerate(cues):
+        start_seconds = int(cue["start"])
         if start_seconds >= 60:
             seen_main_content = True
             continue
-        if seen_main_content and i >= len(lines) * 0.3:
+        if seen_main_content and i >= len(cues) * 0.3:
             appended_start = i
             break
 
     if appended_start == -1:
         return ""
 
-    # 提取从该位置开始的所有文本
+    # 保留追加段自己的时间戳，供剪辑师在开场 timeline 中定位。
     texts = []
-    for line in lines[appended_start:]:
-        line = line.strip()
-        if not line:
-            continue
-        if re.match(r"^\d+$", line):
-            continue
-        if re.match(r"^\d{2}:\d{2}:\d{2}[,\.]\d{3}\s*-->", line):
-            continue
-        texts.append(line)
+    for cue in cues[appended_start:]:
+        stamp = _format_exact_timestamp(int(cue["start"]))
+        text = " ".join(cue["text"].splitlines()).strip()
+        texts.append(f"[{stamp}] {text}")
 
-    return " ".join(texts)
+    return "\n".join(texts)
 
 
 def sample_content(text: str, max_chars: int = 14000) -> str:
@@ -178,7 +110,7 @@ HIGHLIGHTS_FROM_ACTUAL = """\
 
 ---
 
-以下是编辑者已亲手选定的视频开头高光片段（30-90秒）。这是真实使用的开场钩子。
+以下是编辑者已亲手选定的视频开头高光片段。这是重要的编辑判断，不需要重新假装从零选片；你的任务是理解它们为什么成立、组合后是否 surface 了本期真正的 substance，以及有没有明显缺口。
 
 ## 实际高光文本
 
@@ -192,21 +124,19 @@ HIGHLIGHTS_FROM_ACTUAL = """\
 
 ---
 
-先判断这是访谈还是单口，这决定分析框架。
+先判断这是访谈还是单口，并找出其中不可替代的事实、机制、人物选择和现场转折。
 
-**访谈**：分析每段高光是否同时完成两件事——
-① Vantage point：这句话如何隐性建立嘉宾权威？（不是介绍身份，而是"这句话只有在那个位置待过的人才能说出来"）
-② Cognitive gap：观众听完会产生什么具体问题？
+访谈可以用 vantage point、cognitive gap、mechanism、person 和 arc 五个视角理解；它们是帮助看见价值的镜头，不要求每段全部满足。单口重点看论断的证据、推理来路和它在整期里的作用。
 
-**单口**：分析这段话如何代表主播的核心判断，以及制造了什么悬念。
+每段保留可核对的时间戳和定位原话，再用编辑语言说明 substance、目标观众为什么会在意，以及它与其他片段怎样组合。解释可以总结；定位引文本身不要改写。
 
-输出：视频类型和主发言人、中心命题、受众分析、每段高光的时间戳 + 引用原话 + vantage point 分析（仅访谈）+ cognitive gap + 为什么值得观众跳转观看 + 在整体叙事中的位置、整组高光的叙事弧线以及各段之间的组合逻辑。
+输出：视频类型与主发言人、本期真正的问题、具体读者处境、逐段时间戳与定位原话、逐段 substance／观看价值／叙事作用，以及整组高光已经形成的弧线。若缺少一段关键解释或人物线，明确指出应回到正文哪一部分寻找，不为了形式硬补。
 
 输出文件会被剪辑师单独阅读：不要引用 guideline 的内部编号或代号（如「入口4」「框架B」），所有理由用大白话写到自我完备。
 """
 
 HIGHLIGHTS_FROM_SCAN = """\
-你是课代表立正频道的内容编辑，负责为视频选取开场高光片段（30-90秒）。
+你是课代表立正频道的内容编辑，负责从长视频中 surface 最值得先让观众看到的片段。
 
 ## 频道 Guideline（参考）
 
@@ -220,23 +150,24 @@ HIGHLIGHTS_FROM_SCAN = """\
 
 ---
 
-先判断这是访谈还是单口，这决定高光选取的核心逻辑。
+先判断这是访谈还是单口，再找材料中不可替代的事实、机制、人物选择、现场修正和重要解释。不要把最响亮或最戏剧性的句子自动当成最好的开场。
 
-**访谈**：好的高光同时完成两件事——
-① Vantage point（隐性建立嘉宾权威）：这句话，只有在那个位置待过、经历过那些事的人才能说出来。不是靠介绍身份，而是靠嘉宾说的内容本身，让观众感受到「这个人见过我没见过的东西」。有 vantage point 信号的话，往往来自跨行业横向比较、顶层内部视角、亲历重要时刻的第一手描述、深度操盘后的反常识判断。
-② Cognitive gap（制造观众脑子里的问题）：观众听完产生一个还没被满足的具体问题——「为什么这么说？怎么来的？后来呢？」
+访谈可用五个视角比较候选：
+- vantage point：只有这个位置或经历的人容易知道；
+- cognitive gap：自然引出一个具体的下一问；
+- mechanism：把“发生了什么”推进到“为什么”；
+- person：显出嘉宾怎样选择、学习、犹豫或修正；
+- arc：与其他片段组合后形成更大的问题。
 
-对每段候选片段问：「只有在嘉宾那个位置的人才能说这句话吗？」+「听完会产生什么具体问题？」两个都是 yes 才是强力候选。
+vantage point 与 cognitive gap 同时成立通常有力，但完整解释、人物关系、幽默和情绪也可能成立，不要把两个 yes 当筛选器。
 
-访谈输出 **6-8 段**候选高光，覆盖嘉宾的不同侧面（经历故事、行业判断、反常识观点、产品/技术关键解释、创业选择……），让编辑从中选组合。每段必须带可跳转时间戳，说明观众为什么应该跳到这里看。
+候选数量由材料决定。长而散的访谈通常需要多给几段让编辑组合，短而集中的内容可以更少；不要为了达到数字重复同一角度。
 
-**单口**：选主播的核心论断，能代表这期内容最有价值的判断，让人感觉「这个人真的想清楚了」。输出 3-4 段候选。
+单口不仅选结论，也看支撑结论的事实、定义和推理转折。一个响亮判断若离开上下文就变成空话，不适合单独做高光。
 
-两种类型都要做到：候选之间覆盖不同侧面，不要把所有候选集中在同一个角度。几段合起来能讲一个比任何单段都更大的故事——叙事弧线在最后说明。
+每段带可跳转时间戳和可核对的定位原话，再说明 substance、目标观众为什么会在意、在整期中的作用。定位引文保持原话；编辑解释可以总结和比较。
 
-只用原话，不改写不总结。
-
-输出：视频类型和主发言人、中心命题（一句话）、受众分析（现有受众 + 潜在扩展人群）、每段候选的时间戳 + 引用原话 + vantage point（仅访谈）+ cognitive gap + 观看价值说明 + 在整体叙事中的位置、整组候选的叙事弧线和推荐组合。
+输出：视频类型和主发言人、本期真正的问题、具体读者处境、逐段候选的时间戳 + 定位原话 + substance + 观看价值 + 叙事作用，最后给出一到两种有明确逻辑的组合建议。没有进入开场但对完整理解重要的内容，可以列为章节而不是硬塞进高光。
 
 输出文件会被剪辑师单独阅读：不要引用 guideline 的内部编号或代号（如「入口4」「框架B」），所有理由用大白话写到自我完备。
 """
@@ -253,16 +184,13 @@ def _episode_stem(path: Path) -> str:
 
 
 def _read_speaker_labeled(content_path: Path, output_dir: Path, episode_stem: str) -> str:
-    candidates = [
-        output_dir / f"{episode_stem}.speaker_labeled.md",
+    return load_validated_speaker_srt(
+        content_path,
+        [
         output_dir / f"{episode_stem}.speaker_labeled.srt",
-        content_path.parent / f"{episode_stem}.speaker_labeled.md",
         content_path.parent / f"{episode_stem}.speaker_labeled.srt",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate.read_text(encoding="utf-8")
-    return ""
+        ],
+    )
 
 
 def generate_highlights(
@@ -274,6 +202,8 @@ def generate_highlights(
     out_dir = output_dir or srt_path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
     output_path = out_dir / f"{episode_stem}.highlights.md"
+    candidate_path = out_dir / f".{episode_stem}.highlights.candidate.md"
+    candidate_path.unlink(missing_ok=True)
 
     # 读取内容。访谈如果有 speaker_labeled.md/srt，优先用它做归因参考。
     speaker_labeled = _read_speaker_labeled(srt_path, out_dir, episode_stem)
@@ -307,13 +237,16 @@ def generate_highlights(
         prompt = HIGHLIGHTS_FROM_SCAN.format(guideline=guideline, content=content)
 
     print("    高光分析中…", flush=True)
-    call_claude_file_based(prompt, output_path, model=DEFAULT_MODEL)
+    call_claude_file_based(prompt, candidate_path, model=DEFAULT_MODEL)
+    if not candidate_path.read_text(encoding="utf-8").strip():
+        raise RuntimeError("高光模型返回空内容")
+    candidate_path.replace(output_path)
     print(f"    ✓ {output_path.name} 已写入")
     return output_path
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="从 SRT 提取/分析视频高光片段 v2")
+    parser = argparse.ArgumentParser(description="从 SRT 提取/分析视频高光片段 v3")
     parser.add_argument("content", help="输入文件：.final.srt / .corrected.srt / .article.md")
     parser.add_argument(
         "-o", "--output-dir",

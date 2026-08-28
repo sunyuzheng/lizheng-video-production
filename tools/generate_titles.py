@@ -4,10 +4,10 @@
 generate_titles.py — 课代表立正播客标题三轮生成工作流 v4
 
 核心变化（相比 v3）：
-  - 去掉"入口"分类标注要求：候选不再需要标注入口类型，直接说角度为何有吸引力
-  - 放宽高光-标题强约束：强标题优先保留，与高光不配合时注明供终审判断，不自动降级
-  - Round 1 使用频道真实高播标题作外部基准（不是模型自评）
-  - 三轮全程使用 Claude Code Fable 5，timeout 900s
+  - 从本期不可替代的事实、机制、人物与受众 stakes 出发，不按标题类型填格子
+  - 高光、标题与封面按当前平台共同判断，不维护永久的“不重复／不剧透”规则
+  - Round 1 使用频道真实高播标题作外部样本，同时保留新内容超出历史样本的空间
+  - 三轮全程使用 Claude CLI（模型由 CLI 默认或环境变量选择），timeout 900s
 
 用法：
   python3 tools/generate_titles.py episode.article.md        # 自动检测同目录 highlights
@@ -16,7 +16,6 @@ generate_titles.py — 课代表立正播客标题三轮生成工作流 v4
 """
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
@@ -25,6 +24,8 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from tools.claude_cli import DEFAULT_MODEL, call_claude_file_based
+from tools.asset_qc import raise_for_errors, validate_title_output
+from tools.srt_text import plain_text_from_srt
 
 # ── 路径 ────────────────────────────────────────────────────────────────────────
 
@@ -63,19 +64,7 @@ def find_highlights(content_path: Path, stem: str, output_dir: Path | None = Non
 # ── SRT 文本提取 ────────────────────────────────────────────────────────────────
 
 def srt_to_text(srt_path: Path, max_chars: int = 6000) -> str:
-    content = srt_path.read_text(encoding="utf-8")
-    lines = []
-    for line in content.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if re.match(r"^\d+$", line):
-            continue
-        if re.match(r"^\d{2}:\d{2}:\d{2}[,\.]\d{3}\s*-->", line):
-            continue
-        lines.append(line)
-    text = " ".join(lines)
-    return text[:max_chars] + "…（已截断）" if len(text) > max_chars else text
+    return plain_text_from_srt(srt_path, max_chars=max_chars)
 
 
 # ── Round 0：内容理解 + 高光驱动标题广撒网 ──────────────────────────────────────
@@ -89,7 +78,7 @@ ROUND0_WITH_HIGHLIGHTS = """\
 
 ---
 
-## 视频高光片段（视频开头会展示的内容）
+## 视频高光片段
 
 {highlights}
 
@@ -101,13 +90,13 @@ ROUND0_WITH_HIGHLIGHTS = """\
 
 ---
 
-先想清楚这期内容：中心命题是什么，谁会被打动，高光和完整内容各自的价值在哪里。
+先把本期不可替代的 substance 找出来：具体事实、数字、机制、人物选择、第一手比较、重要定义，以及主持人的追问怎样改变了问题。再说清目标观众已经知道什么、卡在哪里、需要什么新信息。
 
-然后生成足够多样的标题候选。这期内容强在哪就从哪进，不要为了多样性凑数。每个候选必须有内容里真实存在的素材支撑，不发明没有的东西。不需要给候选标注框架类型，直接说清楚这个角度为什么有吸引力。
+从真正强的材料出发生成候选，不按“问句、反常识、故事、框架”等类型平均填格子。问题、结论、人物身份、数字、场景和结构性张力都可以使用；每个候选都要指出它依赖哪一项真实材料，以及哪类观众会立刻明白为什么值得点开。
 
-标题和高光有分工：标题不描述高光本身，而是描述高光背后更大的问题——标题让人想点进来，高光让人想看完。
+把标题、高光和封面看成一个组合。它们可以分工，也可以适度重复来降低陌生观众的理解成本；不要为了遵守抽象规则牺牲一个准确、有力的标题。
 
-最后说明你认为本期最值得做的 2-3 个方向，以及为什么。
+最后说明本期最值得深入的 2–3 个方向：它们的证据、目标观众和取舍分别是什么。
 """
 
 ROUND0_WITHOUT_HIGHLIGHTS = """\
@@ -125,11 +114,11 @@ ROUND0_WITHOUT_HIGHLIGHTS = """\
 
 ---
 
-先理解这期内容：最核心的洞见是什么，最有张力的故事或时刻在哪里，谁会最想看这期。
+先找本期不可替代的事实、机制、人物选择和现场转折，再判断哪类观众会在意、他们以前缺少什么信息。
 
-然后生成足够多样的标题候选。这期内容强在哪就从哪进，每个候选有真实内容支撑。不需要给候选标注框架类型，直接说清楚这个角度为什么有吸引力。
+从真正强的材料出发生成候选，不按标题类型填格子。问题、结论、身份、数字、场景和结构性张力都可以使用；每个候选都要指出真实证据与目标观众。
 
-最后说明你认为本期最值得做的 2-3 个方向。
+最后说明本期最值得深入的 2–3 个方向，以及各自的证据和取舍。
 """
 
 
@@ -138,7 +127,11 @@ ROUND0_WITHOUT_HIGHLIGHTS = """\
 ROUND1_PROMPT = """\
 你是课代表立正频道的独立标题评审。
 
-频道：帮听众把说不清楚的问题想清楚。受众：已经做得不错但感觉卡住的人，想要底层框架，反感说教和结论先行。好标题：真实好奇心 + 预告值得投入 + 转发者显得清醒。失败：结论当标题 / 宽泛承诺 / 说教 / AI公文感。
+## 当前频道判断基准
+
+{guideline}
+
+---
 
 ## 频道真实高播标题（用来校准判断）
 
@@ -154,11 +147,11 @@ ROUND1_PROMPT = """\
 
 ---
 
-从 Round 0 候选里找出真正有潜力的，说明每条的优势和问题。
+先独立重读材料线索，再判断 Round 0 哪些候选真正抓住了本期 substance。说明优势与问题时落到具体词、观众理解和内容证据，不用“更有冲击力”“更具体”这类空评价。
 
-然后诊断整体：这期内容最有价值的角度有没有被充分探索？有没有某个候选差了一个词——直接说哪个词改成什么。{highlight_alignment_check}
+然后诊断整体：最有价值的事实、机制、人物关系和 stakes 是否被充分探索？大众观众是否看得懂嘉宾／术语为什么重要？历史高播样本揭示了哪些有效机制，又有哪些不该机械模仿？如果某个候选只差一个词，直接写出替换方案。{highlight_alignment_check}
 
-最后给 Round 2 具体可执行的指令，每条指向一个真实的盲区或改进方向（"利用内容里X这个细节" 而不是 "更具体"）。
+最后给终审具体可执行的补强方向，每条指向本期真实材料或一个清楚的受众盲区。
 """
 
 
@@ -179,15 +172,11 @@ ROUND2_PROMPT = """\
 
 ---
 
-按 Round 1 的指令补充新标题，填补盲区。
+根据评审补充必要的新标题，但先重新判断评审是否真的理解了材料；不要机械执行一个较弱建议。
 
-然后从所有候选里选出最终标题。数量取决于质量，通常 6-10 个。选择标准按优先级：诚实性（视频里确实有，不剧透高光）> 真实好奇心 > 覆盖不同受众群体 > 转发测试（有独立判断的 30 多岁职场人愿意分享）。如果某个标题明显很强但与高光配合不完美，保留它并注明，不要因为高光配合度低就放弃强标题。禁止：结论全说完 / 宽泛承诺 / 说教语气。
+然后从所有候选里选出最终标题，通常 5–10 个，质量不足可以更少。比较它们是否有内容证据、是否具体、目标观众能否迅速看懂厉害和稀缺在哪里、是否提供真实的 stakes 或信息余量、以及是否像这个频道而不是通用营销号。问题和结论都可以成立；关键是承诺能被视频兑现。
 
-为排名前 5 的标题各给一条封面建议。封面和标题各司其职，互补不重复：
-- 访谈视频：从嘉宾原话提炼 3 句金句，每句让人看到都想知道来龙去脉；可以轻微 paraphrase 但不能夸大
-- 单口视频：3-10 字冲击文字，标题做延伸阐释
-
-每条封面建议说清楚：主内容是什么、画面怎么构成、封面和标题如何互补。
+为排名前 5 的标题各给一条封面建议。每条说明：缩略图主文案、真正增加理解的一项身份／数字小字、应选怎样的人物表情和画面关系，以及 16:9 YouTube 与 3:4 小红书怎样分别排。不要默认三句金句、商务海报或大面积黑底；封面与标题可以分工，也可以为清晰而适度重复。
 
 ## 输出文件格式（这是给剪辑师和主播单独阅读的交付文件，不是给你自己的笔记）
 
@@ -197,9 +186,7 @@ ROUND2_PROMPT = """\
 2. `## 前 5 标题的封面建议`
 3. `## 备选`——每条写出标题完整原文和未进最终的原因。
 
-硬性要求：
-- **禁止出现任何轮次代号**（A1、B3、R2-4、「Round 1 指令」「Round 0 候选」这类）。读这个文件的人没看过前几轮的工作文件。需要对比其他候选时，直接引用那条标题的原文。
-- 按指令补充候选、填补盲区这些推理过程在心里完成，不要写进文件——文件里只留结果和结果的理由。
+交付文件不出现 A1、R2-4、“Round 1 指令”等内部轮次代号；读者没有看过工作区。补充候选和填补盲区的过程留在工作文件，交付稿只保留标题、理由和投放判断。
 """
 
 
@@ -231,12 +218,13 @@ def run_round1(round0: Path, highlights: str, workspace: Path) -> Path:
 
     if highlights:
         highlights_section = f"## 视频高光片段\n\n{highlights}\n\n---\n"
-        highlight_alignment_check = "\n- Round 0 候选中，哪些与高光形成了好的分工（标题创造期待，高光验证期待）？如果有标题明显很强但与高光不完全配合，也请保留并注明，让终审决定。"
+        highlight_alignment_check = "\n- 把标题与高光当作组合检查：哪些已经清楚兑现或推进同一承诺，哪些因为重复而变弱，哪些适度重复反而帮助陌生观众理解？不要套用永久的分工公式。"
     else:
         highlights_section = ""
         highlight_alignment_check = ""
 
     prompt = ROUND1_PROMPT.format(
+        guideline=load_guideline(),
         top_titles=top_titles,
         highlights_section=highlights_section,
         round0=r0,
@@ -254,7 +242,7 @@ def run_round2(round0: Path, round1: Path, highlights: str, final_out: Path) -> 
     r1 = round1.read_text(encoding="utf-8")
 
     if highlights:
-        highlights_section = f"## 视频高光片段（供参考：标题和高光最好形成分工，但明显强的标题优先保留）\n\n{highlights}\n\n---\n"
+        highlights_section = f"## 视频高光片段（作为真实素材与整体观看路径参考）\n\n{highlights}\n\n---\n"
     else:
         highlights_section = ""
 
@@ -276,6 +264,8 @@ def generate_titles(
     output_dir: Path | None = None,
     workspace_dir: Path | None = None,
     stem: str | None = None,
+    highlights_path: Path | None = None,
+    discover_highlights: bool = True,
 ) -> Path:
     episode_stem = stem or content_path.with_suffix("").stem
     for suffix in (".article", ".final", ".corrected", ".qwen"):
@@ -299,8 +289,14 @@ def generate_titles(
     else:
         content = srt_to_text(content_path, max_chars=6000)
 
-    # 自动检测高光文件
-    highlights = find_highlights(content_path, episode_stem, output_dir=out_dir)
+    if highlights_path is not None:
+        if not highlights_path.is_file():
+            raise FileNotFoundError(f"指定的 highlights 不存在: {highlights_path}")
+        highlights = highlights_path.read_text(encoding="utf-8")
+    elif discover_highlights:
+        highlights = find_highlights(content_path, episode_stem, output_dir=out_dir)
+    else:
+        highlights = ""
     if highlights:
         print(f"    ✓ 发现高光文件 {episode_stem}.highlights.md，高光驱动模式启动")
     else:
@@ -314,11 +310,16 @@ def generate_titles(
     if stop_at_round == 1:
         return r1
 
-    return run_round2(r0, r1, highlights, final_out)
+    candidate_out = workspace / "round2_candidate.md"
+    run_round2(r0, r1, highlights, candidate_out)
+    candidate_text = candidate_out.read_text(encoding="utf-8")
+    raise_for_errors("标题", validate_title_output(candidate_text))
+    candidate_out.replace(final_out)
+    return final_out
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="课代表立正播客标题三轮生成 v3（高光驱动）")
+    parser = argparse.ArgumentParser(description="课代表立正播客标题三轮生成 v4（高光驱动）")
     parser.add_argument("content", help="输入文件：.article.md 或 .final.srt")
     parser.add_argument(
         "--round", type=int, default=2, choices=[0, 1, 2],

@@ -1,0 +1,32 @@
+# One reviewed, cross-episode ASR hotword per line.
+# Episode-specific guest/company/product names belong in --seeds instead.
+
+孙煜征
+课代表立正
+Superlinear
+Stay Superlinear
+Superlinear Academy
+OpenAI
+ChatGPT
+Codex
+Anthropic
+Claude
+Claude Code
+Cursor
+GitHub
+YouTube
+LinkedIn
+AI Agent
+Agents
+AGI
+MCP
+NotebookLM
+Gemini
+Meta
+Google
+Amazon
+Databricks
+DoorDash
+Canva
+GPT
+SQL

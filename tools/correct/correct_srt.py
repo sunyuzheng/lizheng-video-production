@@ -36,7 +36,7 @@ from tools.codex_cli import DEFAULT_CODEX_MODEL, call_codex_file_based
 _ROOT = Path(__file__).parent.parent.parent
 _VOCAB_FILE = _ROOT / "data" / "channel_vocab.json"
 
-MAX_EDIT_RATIO = 0.20   # 单次最大修改字符比例
+MAX_EDIT_RATIO = 0.20   # 批量修改预算；短字幕保留 15 字符底额
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── 格式规范化规则（规则直接执行，不走 LLM）──────────────────────────────────
@@ -46,8 +46,6 @@ _FORMAT_RULES: list[dict] = [
     {"pat": "百分之十", "rep": "10%"},
     {"pat": "两百",     "rep": "200",  "boundary_guard": True},   # 一两百 不改
     {"pat": "两千",     "rep": "2000", "boundary_guard": True},
-    {"pat": "幺幺",     "rep": "11"},
-    {"pat": "到十",     "rep": "10"},  # 如「到十个」→「到10个」
 ]
 _BOUNDARY_PRECEDING = set("一二三四五六七八九十")
 _FORMAT_PAT_SET = {r["pat"] for r in _FORMAT_RULES}
@@ -77,14 +75,20 @@ def ensure_codex_available() -> str:
 
 
 def load_vocab() -> dict:
-    if _VOCAB_FILE.exists():
-        return json.loads(_VOCAB_FILE.read_text(encoding="utf-8"))
-    return {}
+    if not _VOCAB_FILE.exists():
+        return {}
+    vocab = json.loads(_VOCAB_FILE.read_text(encoding="utf-8"))
+    if not isinstance(vocab, dict) or vocab.get("schema_version") != 2:
+        raise ValueError("channel_vocab.json 必须使用 schema_version=2")
+    if not isinstance(vocab.get("verified_candidates", {}), dict):
+        raise ValueError("channel_vocab.json 的 verified_candidates 必须是对象")
+    return vocab
 
 
-def build_candidates(vocab: dict, episode_seeds: list[str]) -> dict:
+def build_candidates(vocab: dict) -> dict:
     """
-    合并频道候选词 + 本期嘉宾/术语，构建当次校对用的 candidates dict。
+    从频道词表构建需结合语境判断的 candidates dict。
+    本期嘉宾／术语不作为替换候选，而是单独注入 prompt 作为参考写法。
     格式与 v7 相同：{pattern: {"alternatives": [...], "hint": "..."}}
     注意：格式规范化规则不在这里（已提前到规则层），candidates 只处理需要 LLM 判断的
     """
@@ -97,34 +101,19 @@ def build_candidates(vocab: dict, episode_seeds: list[str]) -> dict:
         alts = info.get("alternatives", [])
         candidates[pat] = {"alternatives": alts, "hint": info.get("hint", "")}
 
-    # 2. 来自 episode_seeds 的本期术语（精确字符串匹配）
-    for seed in episode_seeds:
-        seed = seed.strip()
-        if not seed:
-            continue
-        # 不加入 candidates（seeds 用于实体一致性检查，不用于 flag 扫描）
-        # 但如果 seed 是 2 字以上中文，加入 candidates 作为重要词保护
-        # （防止 LLM 把 seed 词改掉）
-        # 实际上 seeds 主要用于 entity consistency check
-
     return candidates
 
 
 def parse_srt(path: Path) -> list[dict]:
-    content = path.read_text(encoding="utf-8", errors="replace")
-    blocks = re.split(r"\n{2,}", content.strip())
-    chunks = []
-    for block in blocks:
-        lines = block.strip().splitlines()
-        if len(lines) < 2:
-            continue
-        ts_line = next((l for l in lines if "-->" in l), "")
-        text_lines = [l for l in lines if not l.strip().isdigit() and "-->" not in l]
-        text = "\n".join(text_lines).strip()
-        if not text:
-            continue
-        chunks.append({"timestamp": ts_line, "text": text})
-    return chunks
+    from tools.subtitle_qc import parse_srt as parse_srt_strict
+
+    return [
+        {
+            "timestamp": f"{cue['start_stamp']} --> {cue['end_stamp']}",
+            "text": cue["text"],
+        }
+        for cue in parse_srt_strict(path)
+    ]
 
 
 def write_srt(chunks: list[dict], path: Path) -> None:
@@ -216,7 +205,11 @@ def scan_flags(chunks: list[dict], candidates: dict) -> list[dict]:
 
 # ── Codex CLI 校对调用 ───────────────────────────────────────────────────────
 
-def build_correction_prompt(chunks: list[dict], flags: list[dict]) -> str:
+def build_correction_prompt(
+    chunks: list[dict],
+    flags: list[dict],
+    episode_seeds: list[str] | None = None,
+) -> str:
     """构建完整校对 prompt（合并候选词扫描 + 全文扫描）"""
     srt_lines = []
     for ci, chunk in enumerate(chunks):
@@ -247,6 +240,15 @@ def build_correction_prompt(chunks: list[dict], flags: list[dict]) -> str:
     else:
         hints_block = ""
 
+    seeds = [seed.strip() for seed in (episode_seeds or []) if seed.strip()]
+    seeds_block = ""
+    if seeds:
+        seeds_block = (
+            "## 本期人工确认的实体写法\n"
+            + "、".join(seeds)
+            + "\n\n这些写法是拼写参考，不是盲目替换规则。只有上下文确实指向该实体时，才把 ASR 变体改成这里的写法；不要改动无关的同音词。\n\n"
+        )
+
     return f"""你是 Qwen3-ASR 字幕纠错助手。本频道内容以中文为主，话题涵盖职场、AI、投资、创业。
 
 ## 任务
@@ -265,13 +267,14 @@ def build_correction_prompt(chunks: list[dict], flags: list[dict]) -> str:
 - 删除重复的短语（口语重启，如「那天我去，那天我去参加」是真实语音）
 - 修改已经正确的数字格式
 
-{hints_block}## 字幕原文
+{seeds_block}{hints_block}## 字幕原文
 
 {srt_text}
 ## 输出格式
 
-输出一个 JSON 数组，每项：{{"original": "需修改的最短子字符串（1-8字）", "corrected": "修正后", "reason": "简短原因"}}
-- original 必须精确存在于字幕原文中
+输出一个 JSON 数组，每项：{{"chunk_idx": 0, "original": "需修改的最短子字符串（1-8字）", "corrected": "修正后", "reason": "简短原因"}}
+- chunk_idx 必须使用字幕原文里方括号中的 0-based 编号；original 必须精确存在于该 chunk
+- 同一个错误出现在多个 chunk 时，逐个列出 chunk_idx；不要要求程序做全文盲替换
 - 不确定时不输出（宁可漏改，不要误改）
 - 没有需要修改的则输出 []
 - 只输出 JSON 数组，不要其他内容"""
@@ -280,6 +283,7 @@ def build_correction_prompt(chunks: list[dict], flags: list[dict]) -> str:
 def call_codex_for_corrections(
     chunks: list[dict],
     flags: list[dict],
+    episode_seeds: list[str] | None = None,
     model: str | None = DEFAULT_CODEX_MODEL,
     timeout: int = 900,
 ) -> tuple[Any, int]:
@@ -288,10 +292,11 @@ def call_codex_for_corrections(
     让 Codex 将 JSON 修正数组写入另一临时文件，Python 读取并返回。
 
     Returns:
-        (parsed, api_errors)。调用失败时返回 ([], 1) 并打印真实原因——
-        失败不能伪装成「没有需要修正的内容」，那会让上游看到 corrections=0 而误判成功。
+        (parsed, api_errors)。调用失败或回复无法解析成 JSON 数组时返回
+        ([], 1) 并打印真实原因——失败不能伪装成「没有需要修正的内容」，
+        那会让上游看到 corrections=0 而误判成功。
     """
-    prompt = build_correction_prompt(chunks, flags)
+    prompt = build_correction_prompt(chunks, flags, episode_seeds=episode_seeds)
 
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", delete=False,
@@ -301,48 +306,87 @@ def call_codex_for_corrections(
         corrections_file = Path(f.name)
 
     try:
-        call_codex_file_based(prompt, corrections_file, model=model, timeout=timeout, cwd=_REPO_ROOT)
+        call_codex_file_based(prompt, corrections_file, model=model, timeout=timeout)
         raw = corrections_file.read_text(encoding="utf-8").strip()
         return parse_llm_response(raw), 0
     except Exception as e:
-        print(f"  ✗ Codex 调用失败: {type(e).__name__}: {str(e)[:300]}", flush=True)
+        print(
+            f"  ✗ Codex 调用或响应解析失败: {type(e).__name__}: {str(e)[:300]}",
+            flush=True,
+        )
         return [], 1
     finally:
         corrections_file.unlink(missing_ok=True)
 
 
-def parse_llm_response(raw: str) -> Any:
+def parse_llm_response(raw: str) -> list[dict]:
     stripped = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.MULTILINE)
     stripped = re.sub(r"\s*```$", "", stripped.strip(), flags=re.MULTILINE).strip()
-    try:
-        return json.loads(stripped)
-    except json.JSONDecodeError:
-        pass
-    for pat in (r"(\[.*\])", r"(\{.*\})"):
-        m = re.search(pat, stripped, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group(1))
-            except json.JSONDecodeError:
-                pass
-    return []
+    candidates = [stripped]
+    embedded = re.search(r"(\[.*\])", stripped, re.DOTALL)
+    if embedded and embedded.group(1) != stripped:
+        candidates.append(embedded.group(1))
+
+    parse_errors: list[str] = []
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError as error:
+            parse_errors.append(str(error))
+            continue
+        if not isinstance(parsed, list):
+            raise ValueError(
+                f"校对模型回复必须是 JSON 数组，实际是 {type(parsed).__name__}"
+            )
+        if not all(isinstance(item, dict) for item in parsed):
+            raise ValueError("校对模型 JSON 数组中的每一项都必须是对象")
+        for position, item in enumerate(parsed):
+            chunk_idx = item.get("chunk_idx")
+            if isinstance(chunk_idx, bool) or not isinstance(chunk_idx, int):
+                raise ValueError(f"校对模型第 {position + 1} 项缺少整数 chunk_idx")
+            if not isinstance(item.get("original"), str) or not item["original"]:
+                raise ValueError(f"校对模型第 {position + 1} 项缺少 original")
+            if not isinstance(item.get("corrected"), str) or not item["corrected"]:
+                raise ValueError(f"校对模型第 {position + 1} 项缺少 corrected")
+        return parsed
+
+    detail = parse_errors[-1] if parse_errors else "没有 JSON 数组"
+    raise ValueError(f"无法解析校对模型回复：{detail}")
 
 
 # ── 验证层 ────────────────────────────────────────────────────────────────────
 
-_CN_DIGITS = set("零一二三四五六七八九十百千万亿两")
-_ALL_DIGITS = set("0123456789") | _CN_DIGITS
-
-
-def _has_digit(s: str) -> bool:
-    return any(c in _ALL_DIGITS for c in s)
-
-
 def _edit_distance_approx(a: str, b: str) -> int:
-    if a == b:
-        return 0
-    common = sum(x == y for x, y in zip(a, b))
-    return (len(a) - common) + (len(b) - common)
+    """Exact Levenshtein distance; strings reaching validation are at most 30 chars."""
+    if len(a) < len(b):
+        a, b = b, a
+    previous = list(range(len(b) + 1))
+    for row, char_a in enumerate(a, 1):
+        current = [row]
+        for column, char_b in enumerate(b, 1):
+            current.append(
+                min(
+                    current[-1] + 1,
+                    previous[column] + 1,
+                    previous[column - 1] + (char_a != char_b),
+                )
+            )
+        previous = current
+    return previous[-1]
+
+
+def _limit_by_edit_budget(corrections: list[dict], total_chars: int) -> list[dict]:
+    """Keep model order while enforcing the advertised aggregate edit budget."""
+    budget = max(15, int(max(total_chars, 1) * MAX_EDIT_RATIO))
+    accepted: list[dict] = []
+    used = 0
+    for correction in corrections:
+        cost = max(len(correction["original"]), len(correction["corrected"]))
+        if used + cost > budget:
+            continue
+        accepted.append(correction)
+        used += cost
+    return accepted
 
 
 def _extract_minimal(orig: str, corr: str, flag_patterns: set) -> tuple[str, str] | None:
@@ -364,7 +408,11 @@ def _extract_minimal(orig: str, corr: str, flag_patterns: set) -> tuple[str, str
 
 def validate_corrections(parsed: Any, chunk_texts: list[str], flags: list[dict]) -> list[dict]:
     full_text = "\n".join(chunk_texts)
-    flag_patterns = {f["found"] for f in flags}
+    flags_by_chunk: dict[int, dict[str, set[str]]] = {}
+    for flag in flags:
+        flags_by_chunk.setdefault(flag["chunk_idx"], {})[flag["found"]] = set(
+            flag.get("alternatives", [])
+        )
 
     items: list = []
     if isinstance(parsed, dict):
@@ -374,37 +422,43 @@ def validate_corrections(parsed: Any, chunk_texts: list[str], flags: list[dict])
 
     corrections = []
     for item in items:
+        chunk_idx = item.get("chunk_idx")
+        if (
+            isinstance(chunk_idx, bool)
+            or not isinstance(chunk_idx, int)
+            or not 0 <= chunk_idx < len(chunk_texts)
+        ):
+            continue
         orig = item.get("original") or item.get("found", "")
         corr = item.get("corrected", "")
         if item.get("action") == "KEEP":
             continue
         if not orig or not corr or orig == corr:
             continue
-        if orig not in full_text:
+        if orig not in chunk_texts[chunk_idx]:
             continue
+        flag_options = flags_by_chunk.get(chunk_idx, {})
+        flag_patterns = set(flag_options)
         if orig not in flag_patterns:
             minimal = _extract_minimal(orig, corr, flag_patterns)
-            if minimal and minimal[0] in full_text:
+            if minimal and minimal[0] in chunk_texts[chunk_idx]:
                 orig, corr = minimal
             else:
                 continue
-        if orig not in _FORMAT_PAT_SET:
-            if _has_digit(orig) or _has_digit(corr):
-                continue
+        alternatives = flag_options.get(orig, set())
+        if alternatives and corr not in alternatives:
+            continue
         if len(orig) > 6:
             continue
         if len(corr) - len(orig) > 2:
             continue
         if orig not in _FORMAT_PAT_SET and _edit_distance_approx(orig, corr) > 4:
             continue
-        corrections.append({"original": orig, "corrected": corr})
+        corrections.append(
+            {"chunk_idx": chunk_idx, "original": orig, "corrected": corr}
+        )
 
-    total_chars = max(len(full_text), 1)
-    total_changed = sum(len(c["original"]) for c in corrections)
-    if total_changed > total_chars * MAX_EDIT_RATIO:
-        corrections = sorted(corrections, key=lambda x: len(x["original"]))[:5]
-
-    return corrections
+    return _limit_by_edit_budget(corrections, len(full_text))
 
 
 def merge_corrections(
@@ -422,30 +476,23 @@ def merge_corrections(
     seen: set = set()
     for group in (strict, loose):
         for c in group:
-            if c["original"] in seen:
+            key = (c["chunk_idx"], c["original"])
+            if key in seen:
                 continue
-            seen.add(c["original"])
+            seen.add(key)
             merged.append(c)
 
     # 两个验证器各自限过改动量，合并后再统一兜一次
     full_text = "\n".join(chunk_texts)
-    total_chars = max(len(full_text), 1)
-    total_changed = sum(len(c["original"]) for c in merged)
-    if total_changed > total_chars * MAX_EDIT_RATIO:
-        merged = sorted(merged, key=lambda x: len(x["original"]))[:5]
-    return merged
+    return _limit_by_edit_budget(merged, len(full_text))
 
 
 def apply_corrections(
     chunks: list[dict], corrections: list[dict]
 ) -> tuple[list[dict], int]:
     """
-    多字修正做全文替换：ASR 听错嘉宾公司名/产品名时，几十处都是同一个错，
-    只改第一处等于 prompt 里要求的「全文一致性统一」没有落地。
-
-    单字修正仍只改第一处：单字该不该改完全取决于上下文（「他」→「她」），
-    全局替换会把用对的地方一并改错。channel_vocab 的 12 条候选词全是多字，
-    单字只可能来自全文扫描，因此这条限制不影响候选词路径。
+    只在模型明确给出的 chunk 中应用修正。即使同一字符串在全文重复，也不能
+    因一个位置的判断改掉其他语境；需要统一实体时，模型必须逐个列出 chunk_idx。
 
     Returns:
         (chunks, replacements) —— replacements 是实际替换处数，不是修正条数
@@ -453,62 +500,83 @@ def apply_corrections(
     result = [dict(c) for c in chunks]
     replacements = 0
     for corr in corrections:
+        chunk_idx = corr.get("chunk_idx")
+        if (
+            isinstance(chunk_idx, bool)
+            or not isinstance(chunk_idx, int)
+            or not 0 <= chunk_idx < len(result)
+        ):
+            continue
         orig, corrected = corr["original"], corr["corrected"]
-        if len(orig) == 1:
-            for chunk in result:
-                if orig in chunk["text"]:
-                    chunk["text"] = chunk["text"].replace(orig, corrected, 1)
-                    replacements += 1
-                    break
-        else:
-            for chunk in result:
-                hits = chunk["text"].count(orig)
-                if hits:
-                    chunk["text"] = chunk["text"].replace(orig, corrected)
-                    replacements += hits
+        hits = result[chunk_idx]["text"].count(orig)
+        if hits:
+            result[chunk_idx]["text"] = result[chunk_idx]["text"].replace(
+                orig, corrected
+            )
+            replacements += hits
     return result, replacements
 
 
-def validate_corrections_full_scan(parsed: Any, chunk_texts: list[str]) -> list[dict]:
+def validate_corrections_full_scan(
+    parsed: Any,
+    chunk_texts: list[str],
+    excluded_flag_patterns: dict[int, set[str]] | None = None,
+) -> list[dict]:
     """全文扫描的验证器：比候选词验证器更宽松（不要求 original 在 flag_patterns 里）"""
     full_text = "\n".join(chunk_texts)
     items: list = parsed if isinstance(parsed, list) else []
 
     corrections = []
-    seen_originals: set = set()
+    seen_locations: set = set()
     for item in items:
+        chunk_idx = item.get("chunk_idx")
+        if (
+            isinstance(chunk_idx, bool)
+            or not isinstance(chunk_idx, int)
+            or not 0 <= chunk_idx < len(chunk_texts)
+        ):
+            continue
         orig = item.get("original", "")
         corr = item.get("corrected", "")
         if not orig or not corr or orig == corr:
             continue
-        if orig not in full_text:
+        if orig not in chunk_texts[chunk_idx]:
             continue
-        if orig in seen_originals:
+        if any(
+            pattern in orig or orig in pattern
+            for pattern in (excluded_flag_patterns or {}).get(chunk_idx, set())
+        ):
+            # 已知候选必须只走带 reviewed alternatives 的 strict validator；
+            # 不能在 strict 拒绝后从宽松全文扫描路径重新进入。
+            continue
+        location = (chunk_idx, orig)
+        if location in seen_locations:
             continue
         # 最长 8 字（允许英文术语稍长一些）
         if len(orig) > 8 and not re.search(r"[A-Za-z]", orig):
             continue
         if len(orig) > 30:
             continue
-        # 不允许大幅扩张（防止 LLM 扩写）
-        if len(corr) - len(orig) > 3:
+        # 只接受局部纠错；大幅扩写和删词都拒绝。
+        if abs(len(corr) - len(orig)) > 3:
             continue
         # 不改纯数字
         if orig.isdigit() or corr.isdigit():
             continue
-        # 修改幅度不能太大（汉字替换 edit distance ≤ 3）
-        if not re.search(r"[A-Za-z]", orig) and _edit_distance_approx(orig, corr) > 3:
+        distance = _edit_distance_approx(orig, corr)
+        if re.search(r"[A-Za-z]", orig):
+            latin_limit = max(4, (max(len(orig), len(corr)) + 2) // 3)
+            if distance > latin_limit:
+                continue
+        elif distance > 3:
             continue
-        seen_originals.add(orig)
-        corrections.append({"original": orig, "corrected": corr})
+        seen_locations.add(location)
+        corrections.append(
+            {"chunk_idx": chunk_idx, "original": orig, "corrected": corr}
+        )
 
     # 批内总改动量上限
-    total_chars = max(len(full_text), 1)
-    total_changed = sum(len(c["original"]) for c in corrections)
-    if total_changed > total_chars * MAX_EDIT_RATIO:
-        corrections = corrections[:5]
-
-    return corrections
+    return _limit_by_edit_budget(corrections, len(full_text))
 
 
 # ── 主校对流程 ─────────────────────────────────────────────────────────────────
@@ -547,7 +615,7 @@ def correct_file(
     output_path = qwen_path.parent / f"{out_stem}.corrected.srt"
 
     vocab = load_vocab()
-    candidates = build_candidates(vocab, seeds)
+    candidates = build_candidates(vocab)
 
     chunks = parse_srt(qwen_path)
     if not chunks:
@@ -566,7 +634,11 @@ def correct_file(
     total_flags = len(all_flags)
 
     parsed, api_errors = call_codex_for_corrections(
-        chunks, all_flags, model=model, timeout=timeout
+        chunks,
+        all_flags,
+        episode_seeds=seeds,
+        model=model,
+        timeout=timeout,
     )
     if stats is not None:
         stats.update({"fmt": fmt_count, "flags": total_flags,
@@ -580,9 +652,18 @@ def correct_file(
         return None
 
     chunk_texts = [c["text"] for c in chunks]
+    flagged_patterns_by_chunk: dict[int, set[str]] = {}
+    for flag in all_flags:
+        flagged_patterns_by_chunk.setdefault(flag["chunk_idx"], set()).add(
+            flag["found"]
+        )
     corrs = merge_corrections(
         validate_corrections(parsed, chunk_texts, all_flags),
-        validate_corrections_full_scan(parsed, chunk_texts),
+        validate_corrections_full_scan(
+            parsed,
+            chunk_texts,
+            excluded_flag_patterns=flagged_patterns_by_chunk,
+        ),
         chunk_texts,
     )
     corrected, replacements = apply_corrections(list(chunks), corrs)
@@ -592,8 +673,8 @@ def correct_file(
         stats["replacements"] = replacements
 
     # ── 步骤 4：种子词落地情况（供人工确认）──────────────────────────────────
-    # 实体一致性由 prompt 要求 Codex 统一写法、apply_corrections 全文替换落地，
-    # 这里只报告 seeds 的出现次数，不再做二次猜测。
+    # 实体一致性由 prompt 要求 Codex 逐个列出需要修改的 chunk，再按位置落地；
+    # 这里只报告 seeds 的出现次数，不再做二次猜测或全文盲替换。
     if seeds:
         full_text = " ".join(c["text"] for c in corrected)
         for seed in seeds:

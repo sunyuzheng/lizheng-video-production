@@ -16,7 +16,7 @@ resplit_srt.py — 把 SRT 条目断成 ≤N 字的显示友好格式
 时间戳按字符数比例插值（中文每字等权，英文字符按实际长度）。
 
 用法：
-  python3 tools/resplit_srt.py input.corrected.srt              # → input.final.srt
+  python3 tools/resplit_srt.py input.corrected.srt              # → input.final.candidate.srt
   python3 tools/resplit_srt.py input.corrected.srt --max-chars 25
   python3 tools/resplit_srt.py input.corrected.srt -o out.srt
 """
@@ -46,63 +46,6 @@ _LATIN_TOKEN_RE = re.compile(
 def _visible_len(text: str) -> int:
     """Count readable CJK/Latin/digit content, excluding spaces/punctuation."""
     return len(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]", text))
-
-_TERM_REPLACEMENTS = [
-    ("NortonNeo", "Norton Neo"),
-    ("ClaudeCode", "Claude Code"),
-    ("CloudCode", "Claude Code"),
-    ("ClaudeCodex", "Claude、Codex"),
-    ("OpusCursor", "Opus、Cursor"),
-    ("ChatGPTGemini", "ChatGPT、Gemini"),
-    ("NotebookLMAgent", "NotebookLM、Agent"),
-    ("AgentAgentsMCPContext", "Agent、Agents、MCP、Context"),
-    ("documentfirst", "Document First"),
-    ("Documentfirst", "Document First"),
-    ("contextintake", "context intake"),
-    ("Contextintake", "context intake"),
-    ("DynamicWorkflow", "Dynamic Workflow"),
-    ("WayWorkFlow", "Workflow"),
-    ("coinstructor", "co-instructor"),
-    ("sayeachother", "say hi to each other"),
-    ("AgenticRed", "Agentic Red"),
-    ("Dollarsh", "DoorDash"),
-    ("TheageofAI", "The Age of AI"),
-    ("hasbegun", "has begun"),
-    ("usergeneratedsoftware", "user-generated software"),
-    ("usergenerated", "user-generated"),
-    ("professionalgenerateds", "professional-generated s"),
-    ("professionalgenerative", "professional-generated"),
-    ("generatedentertainment", "generated entertainment"),
-    ("ShareProjects", "Share Projects"),
-    ("behelpful", "be helpful"),
-    ("contextcuration", "context curation"),
-    ("ContextCuration", "Context Curation"),
-    ("CursorCodex", "Cursor、Codex"),
-    ("knowledgebank", "knowledge bank"),
-    ("knifeedgeofexperience", "knife edge of experience"),
-    ("contextarchitecture", "context architecture"),
-    ("agenticloop", "agentic loop"),
-    ("crossdomainleverage", "cross-domain leverage"),
-    ("AInativedesign", "AI native design"),
-    ("DocumentFirst", "Document First"),
-    ("contextcontextcomponent", "Context、Component"),
-    ("contextcriteria", "Context、Criteria"),
-    ("solutionCER", "solution。CER"),
-    ("contexterror", "Context、Error"),
-    ("intheinthegame", "in the game"),
-    ("reviewreview", "review、review"),
-    ("roundroundround", "round、round、round"),
-    ("DeepSeekDeepSeek", "DeepSeek"),
-    ("intellectualhonesty", "intellectual honesty"),
-    ("Skillrepo", "Skill repo"),
-    ("GoogleDoc", "Google Doc"),
-    ("AgentAgents", "Agent、Agents"),
-    ("agentsmd", "AGENTS.md"),
-    ("intakedashboard", "intake dashboard"),
-    ("AppleWatch", "Apple Watch"),
-    ("superlinearacademysuperlineardotacademy", "Superlinear Academy，superlinear.academy"),
-    ("WebCoding", "Web Coding"),
-]
 
 # ── 时间戳解析 / 格式化 ───────────────────────────────────────────────────────
 
@@ -228,35 +171,28 @@ def _pack_tokens(tokens: list[str], max_chars: int) -> list[str]:
 
 
 def normalize_text(text: str) -> str:
-    """Clean common no-space artifacts from mlx-qwen3-asr subtitle output."""
+    """Normalize only whitespace at CJK/Latin boundaries; never correct semantics."""
     text = text.strip()
-    for src, dst in _TERM_REPLACEMENTS:
-        text = text.replace(src, dst)
     text = re.sub(r"([\u4e00-\u9fff])([A-Za-z0-9][A-Za-z0-9+_.-]*)", r"\1 \2", text)
     text = re.sub(r"([A-Za-z0-9][A-Za-z0-9+_.-]*)([\u4e00-\u9fff])", r"\1 \2", text)
     text = re.sub(r"[ \t]{2,}", " ", text)
-    text = text.replace("AI 技校", "AI技校")
     return text
 
 
 # ── SRT 解析（轻量版，不依赖 correct_srt）────────────────────────────────────
 
 def _parse_srt(path: Path) -> list[dict]:
-    content = path.read_text(encoding="utf-8", errors="replace")
-    blocks = re.split(r"\n{2,}", content.strip())
-    chunks = []
-    for block in blocks:
-        lines = block.strip().splitlines()
-        if len(lines) < 2:
-            continue
-        ts_line = next((l for l in lines if "-->" in l), "")
-        text_lines = [l for l in lines
-                      if not l.strip().isdigit() and "-->" not in l]
-        text = normalize_text(" ".join(text_lines))
-        if not text or not ts_line:
-            continue
-        chunks.append({"timestamp": ts_line, "text": text})
-    return chunks
+    # Reuse the delivery parser so malformed source blocks cannot disappear
+    # before the final QC step has a chance to inspect them.
+    from subtitle_qc import parse_srt
+
+    return [
+        {
+            "timestamp": f"{cue['start_stamp']} --> {cue['end_stamp']}",
+            "text": normalize_text(" ".join(cue["text"].splitlines())),
+        }
+        for cue in parse_srt(path)
+    ]
 
 
 # ── 合并窗口：跨越 ASR 的坏 cue 边界 ─────────────────────────────────────────
@@ -422,7 +358,8 @@ def resplit_srt(
     读取 input_path (.corrected.srt 或 .qwen.srt)，
     先把停顿很小的相邻 cue 合并成窗口（跨越 ASR 的坏边界），
     再断成 ≤ max_chars 字符的条目，时间戳按字符比例插值，
-    写入 output_path（默认为 input_path 同目录的 .final.srt）。
+    写入 output_path（默认为 input_path 同目录的
+    .final.candidate.srt，通过字幕 QC 后才可晋升为 .final.srt）。
     """
     if output_path is None:
         stem = input_path.name
@@ -430,7 +367,9 @@ def resplit_srt(
             if stem.endswith(suf):
                 stem = stem[: -len(suf)]
                 break
-        output_path = input_path.parent / f"{stem}.final.srt"
+        output_path = input_path.parent / f"{stem}.final.candidate.srt"
+    if input_path.resolve() == output_path.resolve():
+        raise ValueError("断句输出不能覆盖输入 SRT")
 
     chunks = _parse_srt(input_path)
     result: list[dict] = []
@@ -444,6 +383,7 @@ def resplit_srt(
 
     result = _repair_display_timing(result)
 
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         for i, c in enumerate(result, 1):
             f.write(f"{i}\n{c['timestamp']}\n{c['text']}\n\n")
@@ -455,7 +395,12 @@ def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="SRT 断句工具")
     parser.add_argument("input", help="输入 SRT 文件路径")
-    parser.add_argument("-o", "--output", default=None, help="输出路径（默认 .final.srt）")
+    parser.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="输出路径（默认 .final.candidate.srt，需通过 QC 后晋升）",
+    )
     parser.add_argument("--max-chars", type=int, default=DEFAULT_MAX_CHARS,
                         help=f"每条最大字符数（默认 {DEFAULT_MAX_CHARS}）")
     args = parser.parse_args()
@@ -470,7 +415,10 @@ def main() -> None:
         output_path=Path(args.output).resolve() if args.output else None,
         max_chars=args.max_chars,
     )
-    print(f"✓ {len(list(open(out).read().split('\n\n')))-1} 条 → {out.name}")
+    block_count = len(
+        [block for block in out.read_text(encoding="utf-8").split("\n\n") if block.strip()]
+    )
+    print(f"✓ {block_count} 条 → {out.name}")
 
 
 if __name__ == "__main__":

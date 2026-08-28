@@ -18,7 +18,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -26,7 +25,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-import numpy as np
+_REPO_ROOT = Path(__file__).parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from tools.subtitle_qc import (
+    parse_srt as parse_strict_srt,
+    validate_distinct_paths,
+)
 
 
 DEFAULT_DIARIZATION_MODEL = "pyannote/speaker-diarization-community-1"
@@ -231,6 +237,8 @@ def parse_ref_arg(value: str) -> tuple[str, list[Path]]:
 
 
 def cosine(a: np.ndarray, b: np.ndarray) -> float:
+    import numpy as np
+
     a = np.asarray(a, dtype=np.float32).reshape(-1)
     b = np.asarray(b, dtype=np.float32).reshape(-1)
     denom = float(np.linalg.norm(a) * np.linalg.norm(b))
@@ -264,6 +272,8 @@ def load_embedding_inference(model_name: str, token: str | None, device_preferen
 
 
 def embed_file(inference, path: Path) -> np.ndarray:
+    import numpy as np
+
     emb = inference(str(path))
     if hasattr(emb, "data"):
         emb = emb.data
@@ -300,6 +310,8 @@ def extract_turn_clip(audio_path: Path, turn: Turn, target: Path, max_seconds: f
 
 
 def average_embeddings(vectors: list[np.ndarray]) -> np.ndarray:
+    import numpy as np
+
     if not vectors:
         raise ValueError("no embeddings")
     stacked = np.vstack([v.reshape(1, -1) for v in vectors])
@@ -376,41 +388,11 @@ def identify_speakers(
     return mapping, labeled
 
 
-_SRT_TS_RE = re.compile(
-    r"(?P<sh>\d{2}):(?P<sm>\d{2}):(?P<ss>\d{2}),(?P<sms>\d{3})\s*-->\s*"
-    r"(?P<eh>\d{2}):(?P<em>\d{2}):(?P<es>\d{2}),(?P<ems>\d{3})"
-)
-
-
-def parse_ts(match: re.Match[str], prefix: str) -> float:
-    return (
-        int(match.group(prefix + "h")) * 3600
-        + int(match.group(prefix + "m")) * 60
-        + int(match.group(prefix + "s"))
-        + int(match.group(prefix + "ms")) / 1000
-    )
-
-
 def parse_srt(path: Path) -> list[Cue]:
-    text = path.read_text(encoding="utf-8-sig")
-    cues: list[Cue] = []
-    for block in re.split(r"\n\s*\n", text.strip()):
-        lines = [line.rstrip() for line in block.splitlines() if line.strip()]
-        if len(lines) < 2:
-            continue
-        ts_idx = next((idx for idx, line in enumerate(lines) if "-->" in line), None)
-        if ts_idx is None:
-            continue
-        match = _SRT_TS_RE.search(lines[ts_idx])
-        if not match:
-            continue
-        try:
-            index = int(lines[0]) if ts_idx > 0 and lines[0].isdigit() else len(cues) + 1
-        except ValueError:
-            index = len(cues) + 1
-        body = "\n".join(lines[ts_idx + 1 :]).strip()
-        cues.append(Cue(index, parse_ts(match, "s"), parse_ts(match, "e"), body))
-    return cues
+    return [
+        Cue(cue["index"], cue["start"], cue["end"], cue["text"])
+        for cue in parse_strict_srt(path)
+    ]
 
 
 def fmt_ts(seconds: float) -> str:
@@ -551,6 +533,33 @@ def main() -> None:
     process_dir.mkdir(parents=True, exist_ok=True)
 
     audio_path = process_dir / f"{stem}.diarization_16k.wav"
+    raw_rttm = process_dir / f"{stem}.diarization.rttm"
+    turns_json = process_dir / f"{stem}.speaker_turns.json"
+    map_json = process_dir / f"{stem}.speaker_map.json"
+    qc_path = process_dir / f"{stem}.speaker_qc.md"
+    srt_path = Path(args.srt).expanduser().resolve() if args.srt else media_path.with_suffix(".final.srt")
+    labeled_srt = media_path.with_suffix(".speaker_labeled.srt")
+    labeled_md = media_path.with_suffix(".speaker_labeled.md")
+    refs = dict(args.speaker_ref)
+    artifact_roles: dict[str, Path | None] = {
+        "media": media_path,
+        "source_srt": srt_path,
+        "diarization_audio": audio_path,
+        "diarization_rttm": raw_rttm,
+        "speaker_turns": turns_json,
+        "speaker_map": map_json,
+        "speaker_qc": qc_path,
+        "labeled_srt": labeled_srt,
+        "labeled_markdown": labeled_md,
+    }
+    for speaker, paths in refs.items():
+        for index, path in enumerate(paths):
+            artifact_roles[f"speaker_ref_{speaker}_{index}"] = path
+    try:
+        validate_distinct_paths(artifact_roles)
+    except ValueError as error:
+        parser.error(str(error))
+
     if not audio_path.exists() or not args.reuse_audio:
         print(f"extract audio -> {audio_path}", flush=True)
         extract_audio(media_path, audio_path)
@@ -567,10 +576,8 @@ def main() -> None:
         exclusive=not args.no_exclusive,
         device_preference=args.device,
     )
-    raw_rttm = process_dir / f"{stem}.diarization.rttm"
     write_rttm(raw_turns, raw_rttm, stem)
 
-    refs = dict(args.speaker_ref)
     print("match known speaker references" if refs else "no known speaker references; keep raw labels", flush=True)
     mapping, labeled_turns = identify_speakers(
         raw_turns,
@@ -582,26 +589,20 @@ def main() -> None:
         assign_remaining=args.assign_remaining,
         work_dir=process_dir,
     )
-    turns_json = process_dir / f"{stem}.speaker_turns.json"
-    map_json = process_dir / f"{stem}.speaker_map.json"
     write_json(turns_json, [turn.__dict__ for turn in labeled_turns])
     write_json(map_json, mapping)
 
-    srt_path = Path(args.srt).expanduser().resolve() if args.srt else media_path.with_suffix(".final.srt")
     output_files = [raw_rttm, turns_json, map_json]
     labels: list[tuple[str, dict, str]] = []
     if srt_path.exists():
         cues = parse_srt(srt_path)
         labels = [label_cue(cue, labeled_turns, min_dominance=args.min_dominance) for cue in cues]
-        labeled_srt = media_path.with_suffix(".speaker_labeled.srt")
-        labeled_md = media_path.with_suffix(".speaker_labeled.md")
         write_labeled_srt(cues, labels, labeled_srt)
         write_labeled_md(cues, labels, labeled_md)
         output_files.extend([labeled_srt, labeled_md])
     else:
         print(f"SRT not found, skipping SRT merge: {srt_path}", file=sys.stderr)
 
-    qc_path = process_dir / f"{stem}.speaker_qc.md"
     write_qc(
         qc_path,
         media_path=media_path,

@@ -1,37 +1,35 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-文件响应模式 Claude CLI 工具
+"""Safe, non-interactive Claude CLI text generation.
 
-原则（来自 gist.github.com/grapeot/9cbdcf7f26bd1d69a11c39414b54dbe6）：
-  - 文件模式 > pipe 模式：Claude 的心理模型是"完成工作并保存"，而非"对话回答"，不会截断
-  - 大内容通过文件传递，绕过 CLI 参数长度限制
-  - --permission-mode bypassPermissions 用于自动化流水线
+The model receives the task on stdin, has no tools, and returns text on stdout.
+Python owns the output file so a text-generation step never needs filesystem or
+shell permissions.
 """
 
+import os
 import subprocess
-import tempfile
 from pathlib import Path
 
-DEFAULT_MODEL = "claude-fable-5"
-FALLBACK_CODEX_MODEL = "gpt-5.5"
+DEFAULT_MODEL: str | None = os.environ.get("LIZHENG_CLAUDE_MODEL") or None
+FALLBACK_CODEX_MODEL: str | None = os.environ.get("LIZHENG_CODEX_MODEL") or None
 
 
 def call_claude_file_based(
     prompt: str,
     output_path: Path,
-    model: str = DEFAULT_MODEL,
+    model: str | None = DEFAULT_MODEL,
     timeout: int = 900,
     fallback: bool = True,
 ) -> str:
     """
-    文件响应模式，带降级：优先 Claude（默认 claude-fable-5）；Claude CLI 不存在、
-    调用失败、超时或未写出文件时，自动降级到 Codex（gpt-5.5），产物文件约定不变。
+    安全文本模式，带降级：优先 Claude CLI；Claude CLI 不存在、调用失败、
+    超时或未返回文本时，自动降级到 Codex CLI，产物文件约定不变。
 
     Args:
         prompt:      完整任务描述（包含上下文内容，可以很大）
         output_path: 模型将写入结果的目标文件
-        model:       Claude 模型，默认 claude-fable-5
+        model:       Claude 模型；None 表示使用 Claude CLI 默认配置
         timeout:     subprocess 超时秒数
         fallback:    是否允许降级到 Codex，默认允许
 
@@ -46,10 +44,11 @@ def call_claude_file_based(
     except (RuntimeError, FileNotFoundError, subprocess.TimeoutExpired) as e:
         if not fallback:
             raise
+        claude_label = model or "CLI 默认配置"
+        codex_label = FALLBACK_CODEX_MODEL or "CLI 默认配置"
         print(
-            f"  ⚠ claude ({model}) 不可用，降级到 codex {FALLBACK_CODEX_MODEL}: "
-            f"{str(e)[:200]}",
-            flush=True,
+            f"  ⚠ claude ({claude_label}) 不可用，降级到 codex ({codex_label}): "
+            f"{str(e)[:200]}", flush=True,
         )
         try:
             from tools.codex_cli import call_codex_file_based
@@ -64,43 +63,47 @@ def call_claude_file_based(
 def _call_claude_once(
     prompt: str,
     output_path: Path,
-    model: str,
+    model: str | None,
     timeout: int,
 ) -> str:
-    """单次 Claude 调用：prompt 写临时文件，让 Claude 把完整输出写入 output_path。"""
+    """Run Claude once without tools and write its stdout to ``output_path``."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.unlink(missing_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".md", delete=False,
-        encoding="utf-8", prefix="kdb_task_",
-    ) as f:
-        f.write(prompt)
-        task_file = Path(f.name)
 
-    try:
-        instruction = (
-            f"Read all task instructions and content from {task_file}. "
-            f"Write your complete response directly to {output_path}. "
-            f"Do not output anything to the terminal — write only to the file."
-        )
-        result = subprocess.run(
-            [
-                "claude",
-                "--permission-mode", "bypassPermissions",
-                "--model", model,
-                "-p", instruction,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"claude 失败 (exit {result.returncode}): {result.stderr[:400]}"
-            )
-        if not output_path.exists() or output_path.stat().st_size == 0:
-            raise RuntimeError(f"Claude 未写入输出文件: {output_path}")
+    instruction = (
+        "Complete the task using only the instructions and content below. "
+        "Return only the requested final answer content, with no preface.\n\n"
+        f"{prompt}"
+    )
+    cmd = [
+        "claude",
+        "--print",
+        "--safe-mode",
+        "--tools",
+        "",
+        "--no-session-persistence",
+        "--permission-mode",
+        "dontAsk",
+        "--output-format",
+        "text",
+    ]
+    if model:
+        cmd.extend(["--model", model])
 
-        return output_path.read_text(encoding="utf-8")
-    finally:
-        task_file.unlink(missing_ok=True)
+    result = subprocess.run(
+        cmd,
+        input=instruction,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "无错误详情"
+        raise RuntimeError(
+            f"claude 失败 (exit {result.returncode}): {detail[:400]}"
+        )
+    if not result.stdout.strip():
+        raise RuntimeError("Claude 未返回任何文本")
+
+    output_path.write_text(result.stdout, encoding="utf-8")
+    return result.stdout

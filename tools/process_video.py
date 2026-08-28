@@ -7,9 +7,9 @@ process_video.py v4 — 视频转录 + 字幕校对 + 高光 + 文章 + 标题 +
   1. Qwen3-ASR 转录
   2. Codex 字幕校对
   3. 断句处理
-  4. 提取视频高光片段（扫描全片选 3-5 个高光，供标题锚定）
+  4. 提取视频高光候选（数量由材料决定，供编辑与标题流程使用）
   5. 生成频道风格文章
-  6. 生成播客标题（高光驱动，三轮 Claude Fable 5 工作流）
+  6. 生成播客标题（高光驱动，三轮 Claude CLI 工作流）
   7. 生成 YouTube description（介绍 + 章节）
 
 用法：
@@ -24,9 +24,11 @@ process_video.py v4 — 视频转录 + 字幕校对 + 高光 + 文章 + 标题 +
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -37,20 +39,32 @@ sys.path.insert(0, str(_TOOLS / "correct"))
 AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".mp4", ".mov", ".flac", ".ogg", ".webm"}
 QWEN_MODEL = "Qwen/Qwen3-ASR-1.7B"
 QWEN_LANG  = "Chinese"
-CODEX_CORRECTION_MODEL = None
-CLAUDE_CONTENT_MODEL = "claude-fable-5"
+CODEX_CORRECTION_MODEL = (
+    os.environ.get("LIZHENG_CODEX_CORRECTION_MODEL")
+    or os.environ.get("LIZHENG_CODEX_MODEL")
+    or None
+)
+CLAUDE_CONTENT_MODEL = os.environ.get("LIZHENG_CLAUDE_MODEL") or None
 _VOCAB_FILE = _ROOT / "data" / "channel_vocab.json"
 
 
 def load_channel_context() -> str:
     """从 channel_vocab.json 读取预构建的 hotwords context 字符串"""
-    if _VOCAB_FILE.exists():
-        try:
-            vocab = json.loads(_VOCAB_FILE.read_text(encoding="utf-8"))
-            return vocab.get("hotwords_context", "")
-        except Exception:
-            pass
-    return ""
+    if not _VOCAB_FILE.exists():
+        return ""
+    try:
+        vocab = json.loads(_VOCAB_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        print(f"  ⚠ 无法读取频道 hotwords，当前转写不注入词表：{error}", file=sys.stderr)
+        return ""
+    if vocab.get("schema_version") != 2:
+        print("  ⚠ channel_vocab schema 不是 v2，当前转写不注入词表", file=sys.stderr)
+        return ""
+    context = vocab.get("hotwords_context", "")
+    if not isinstance(context, str):
+        print("  ⚠ channel_vocab.hotwords_context 不是字符串，当前转写不注入词表", file=sys.stderr)
+        return ""
+    return context
 
 
 def build_transcribe_context(channel_ctx: str, episode_seeds: list[str]) -> str:
@@ -88,8 +102,36 @@ def episode_stem(video_path: Path) -> str:
     return video_path.with_suffix("").name
 
 
+def artifact_marker(status: str) -> str:
+    """Render delivery status without making a successful reuse look like failure."""
+    if status == "本次生成":
+        return "✓"
+    if status.startswith("显式复用"):
+        return "↻"
+    if status.startswith("已跳过"):
+        return "→"
+    return "✗"
+
+
 def process_dir_for(video_path: Path) -> Path:
     return video_path.parent / f"{episode_stem(video_path)}_process"
+
+
+def stage_legacy_qwen(legacy_qwen: Path, workspace_qwen: Path) -> Path:
+    """Copy a legacy raw transcript into the workspace without touching source."""
+    workspace_qwen.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        prefix=f".{workspace_qwen.name}.staging.",
+        dir=workspace_qwen.parent,
+        delete=False,
+    ) as handle:
+        candidate = Path(handle.name)
+    try:
+        shutil.copy2(legacy_qwen, candidate)
+        candidate.replace(workspace_qwen)
+    finally:
+        candidate.unlink(missing_ok=True)
+    return workspace_qwen
 
 
 def _resolve_asr_cli() -> str | None:
@@ -104,12 +146,9 @@ def _resolve_asr_cli() -> str | None:
 
 
 def transcribe(video_path: Path, output_dir: Path, context: str = "") -> Path:
-    """mlx-qwen3-asr CLI 转录，输出 <stem>.qwen.srt。"""
+    """Run mlx-qwen3-asr for this invocation and output <stem>.qwen.srt."""
     output_dir.mkdir(parents=True, exist_ok=True)
     qwen_srt = output_dir / f"{episode_stem(video_path)}.qwen.srt"
-    if qwen_srt.exists():
-        print(f"  [跳过] 已存在 {qwen_srt.name}")
-        return qwen_srt
 
     venv_cli = Path(sys.executable).parent / "mlx-qwen3-asr"
     homebrew_cli = Path("/opt/homebrew/bin/mlx-qwen3-asr")
@@ -124,57 +163,65 @@ def transcribe(video_path: Path, output_dir: Path, context: str = "") -> Path:
     print(f"  使用本地 mlx-qwen3-asr CLI: {cli}", flush=True)
     print(f"  模型: {QWEN_MODEL}", flush=True)
     t0 = time.time()
-    cmd = [
-        cli,
-        str(video_path),
-        "--model", QWEN_MODEL,
-        "--language", QWEN_LANG,
-        "--output-dir", str(output_dir),
-        "--output-format", "srt",
-        "--verbose",
-    ]
-    if context:
-        cmd.extend(["--context", context])
-
     print(f"  转录中: {video_path.name}", flush=True)
-    before = {p.resolve() for p in output_dir.glob("*.srt")}
-    try:
-        subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError as e:
-        print(f"  ✗ mlx-qwen3-asr 转录失败，退出码 {e.returncode}")
-        sys.exit(e.returncode)
+    with tempfile.TemporaryDirectory(prefix="lizheng-asr-run-") as temp_dir:
+        run_dir = Path(temp_dir)
+        cmd = [
+            cli,
+            str(video_path),
+            "--model", QWEN_MODEL,
+            "--language", QWEN_LANG,
+            "--output-dir", str(run_dir),
+            "--output-format", "srt",
+            "--verbose",
+        ]
+        if context:
+            cmd.extend(["--context", context])
+        try:
+            subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"  ✗ mlx-qwen3-asr 转录失败，退出码 {e.returncode}")
+            sys.exit(e.returncode)
 
-    generated = output_dir / f"{episode_stem(video_path)}.srt"
-    if not generated.exists():
-        after = [p for p in output_dir.glob("*.srt") if p.resolve() not in before]
-        if after:
-            generated = max(after, key=lambda p: p.stat().st_mtime)
-    if not generated.exists():
-        print("  ✗ mlx-qwen3-asr 未生成 SRT 文件")
-        sys.exit(1)
-    generated.replace(qwen_srt)
+        expected = run_dir / f"{episode_stem(video_path)}.srt"
+        generated_files = sorted(run_dir.rglob("*.srt"))
+        if expected.exists():
+            current_generated = expected
+        elif len(generated_files) == 1:
+            current_generated = generated_files[0]
+        else:
+            detail = f"找到 {len(generated_files)} 个候选" if generated_files else "没有候选"
+            print(f"  ✗ mlx-qwen3-asr 本次未生成唯一可识别的 SRT（{detail}）")
+            sys.exit(1)
+
+        from subtitle_qc import parse_srt
+
+        try:
+            cues = parse_srt(current_generated)
+        except ValueError as error:
+            print(f"  ✗ mlx-qwen3-asr 产出的 SRT 结构无效：{error}")
+            sys.exit(1)
+
+        with tempfile.NamedTemporaryFile(
+            prefix=f".{qwen_srt.name}.candidate.",
+            dir=output_dir,
+            delete=False,
+        ) as handle:
+            qwen_candidate = Path(handle.name)
+        try:
+            shutil.copy2(current_generated, qwen_candidate)
+            qwen_candidate.replace(qwen_srt)
+        finally:
+            qwen_candidate.unlink(missing_ok=True)
+
+        if not qwen_srt.exists():
+            print("  ✗ mlx-qwen3-asr 本次未生成新的 SRT 文件")
+            sys.exit(1)
 
     elapsed = time.time() - t0
-    n = sum(1 for block in qwen_srt.read_text(encoding="utf-8").split("\n\n") if block.strip())
+    n = len(cues)
     print(f"  ✓ 转录完成  {n} 条  {elapsed:.0f}s  → {qwen_srt.name}")
     return qwen_srt
-
-
-def _write_srt(chunks: list, srt_path: Path) -> None:
-    with open(srt_path, "w", encoding="utf-8") as f:
-        for i, chunk in enumerate(chunks, 1):
-            start = _fmt_ts(chunk["start"])
-            end   = _fmt_ts(chunk["end"])
-            text  = chunk["text"].strip()
-            f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
-
-
-def _fmt_ts(seconds: float) -> str:
-    ms = max(0, int(round(seconds * 1000)))
-    h, ms = divmod(ms, 3_600_000)
-    m, ms = divmod(ms,    60_000)
-    s, ms = divmod(ms,     1_000)
-    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
 def correct(
@@ -254,22 +301,33 @@ def resplit(corrected_srt: Path, output_path: Path, max_chars: int = 20) -> Path
         return result
     except Exception as e:
         print(f"  ✗ 断句失败: {e}")
-        return None
+        raise
 
 
 def validate_and_export_subtitles(
+    candidate_srt: Path,
     final_srt: Path,
     vtt_path: Path,
     report_path: Path,
     max_chars: int = 20,
 ) -> bool:
-    """Run the hard delivery gate and export VTT from the exact final text."""
+    """Validate a candidate and promote a matching SRT/VTT pair on success."""
     sys.path.insert(0, str(_TOOLS))
-    from subtitle_qc import inspect, parse_srt, write_report, write_vtt
+    from subtitle_qc import (
+        inspect,
+        parse_srt,
+        promote_subtitle_pair,
+        write_parse_error_report,
+        write_report,
+    )
 
-    cues = parse_srt(final_srt)
+    try:
+        cues = parse_srt(candidate_srt)
+    except ValueError as error:
+        write_parse_error_report(report_path, error)
+        print(f"  ✗ 字幕 QC 未通过：{error}")
+        return False
     findings = inspect(cues, max_chars=max_chars, min_duration=0.2, max_cps=25.0)
-    write_vtt(cues, vtt_path)
     write_report(cues, findings, report_path)
     failed = sum(len(items) for items in findings.values())
     if failed:
@@ -281,6 +339,8 @@ def validate_and_export_subtitles(
             f"short={len(findings['short'])} fast={len(findings['fast'])}"
         )
         return False
+
+    promote_subtitle_pair(candidate_srt, cues, final_srt, vtt_path)
     print(f"  ✓ 字幕 QC 通过并导出 VTT → {vtt_path.name}")
     return True
 
@@ -293,6 +353,7 @@ def article(
     article_type: str,
     surface: str,
     highlights_path: Path | None = None,
+    discover_highlights: bool = True,
     writing_skill_path: Path | None = None,
 ) -> Path | None:
     sys.path.insert(0, str(_TOOLS))
@@ -308,6 +369,7 @@ def article(
             article_type=article_type,
             surface=surface,
             highlights_path=highlights_path,
+            discover_highlights=discover_highlights,
             writing_skill_path=writing_skill_path,
         )
         elapsed = time.time() - t0
@@ -333,7 +395,14 @@ def highlights(srt_path: Path, output_dir: Path, stem: str) -> Path | None:
         return None
 
 
-def titles(content_path: Path, output_dir: Path, workspace_dir: Path, stem: str) -> Path | None:
+def titles(
+    content_path: Path,
+    output_dir: Path,
+    workspace_dir: Path,
+    stem: str,
+    highlights_path: Path | None = None,
+    discover_highlights: bool = True,
+) -> Path | None:
     sys.path.insert(0, str(_TOOLS))
     from generate_titles import generate_titles
     t0 = time.time()
@@ -344,6 +413,8 @@ def titles(content_path: Path, output_dir: Path, workspace_dir: Path, stem: str)
             output_dir=output_dir,
             workspace_dir=workspace_dir,
             stem=stem,
+            highlights_path=highlights_path,
+            discover_highlights=discover_highlights,
         )
         elapsed = time.time() - t0
         print(f"  ✓ 标题完成  {elapsed:.0f}s  → {result.name}")
@@ -373,6 +444,11 @@ def main():
     parser.add_argument("video", help="视频文件路径")
     parser.add_argument("--skip-transcribe", action="store_true")
     parser.add_argument("--skip-correct", action="store_true")
+    parser.add_argument(
+        "--subtitle-source",
+        default=None,
+        help="显式指定已有 SRT 作为字幕源；跳过 ASR 与校对，不自动猜测旧 corrected/final",
+    )
     parser.add_argument("--skip-article", action="store_true",
                         help="跳过文章生成")
     parser.add_argument("--skip-highlights", action="store_true",
@@ -396,7 +472,7 @@ def main():
     parser.add_argument(
         "--article-writing-skill",
         default=None,
-        help="显式指定 writing skill 或此前保存的快照，用于固定/重放同一 prompt",
+        help="显式指定 writing skill 或此前保存的主文件；完整复现还需相同代码与素材",
     )
     parser.add_argument("--seeds", nargs="*", default=None,
                         help="本期嘉宾/术语（跳过交互式询问）")
@@ -430,6 +506,13 @@ def main():
     delivery_dir = video_path.parent
     process_dir = Path(args.process_dir).resolve() if args.process_dir else process_dir_for(video_path)
     process_dir.mkdir(parents=True, exist_ok=True)
+    explicit_subtitle_source = (
+        Path(args.subtitle_source).expanduser().resolve()
+        if args.subtitle_source
+        else None
+    )
+    if explicit_subtitle_source and not explicit_subtitle_source.is_file():
+        parser.error(f"--subtitle-source 不存在: {explicit_subtitle_source}")
 
     print(f"\n{'='*55}")
     print(f"视频: {video_path.name}")
@@ -437,7 +520,7 @@ def main():
     print(f"过程目录: {process_dir}")
     correction_model = args.model or "Codex CLI 默认配置"
     print(f"校对引擎: Codex CLI ({correction_model})")
-    print(f"高光/文章/标题模型: {CLAUDE_CONTENT_MODEL}")
+    print(f"高光/文章/标题模型: {CLAUDE_CONTENT_MODEL or 'Claude CLI 默认配置'}")
     print(f"流程: 转录 → 校对 → 断句 → 高光 → 文章 → 标题 → YouTube description")
     print(f"{'='*55}")
 
@@ -454,7 +537,10 @@ def main():
             print(f"  种子术语已确认：{episode_seeds}")
 
     # ── 1. 转录 ───────────────────────────────────────────────────────────────
-    if not args.skip_transcribe:
+    if explicit_subtitle_source:
+        qwen_srt = explicit_subtitle_source
+        print(f"\n[1/7] ASR 已跳过（显式字幕源） → {qwen_srt}")
+    elif not args.skip_transcribe:
         print("\n[1/7] Qwen3-ASR 转录")
         channel_ctx = load_channel_context()
         context = build_transcribe_context(channel_ctx, episode_seeds)
@@ -463,110 +549,140 @@ def main():
         qwen_srt = process_dir / f"{stem}.qwen.srt"
         legacy_qwen = delivery_dir / f"{stem}.qwen.srt"
         if not qwen_srt.exists() and legacy_qwen.exists():
-            qwen_srt = legacy_qwen
+            qwen_srt = stage_legacy_qwen(legacy_qwen, qwen_srt)
+            print(f"  已将 legacy raw 字幕复制到工作区：{qwen_srt}")
         if not qwen_srt.exists():
-            fallback = None
-            if args.skip_correct:
-                for candidate in [
-                    process_dir / f"{stem}.corrected.srt",
-                    delivery_dir / f"{stem}.corrected.srt",
-                    delivery_dir / f"{stem}.final.srt",
-                ]:
-                    if candidate.exists():
-                        fallback = candidate
-                        break
-            if fallback:
-                qwen_srt = fallback
-                print(f"\n[1/7] 转录 (已跳过，无 qwen，后续使用 {qwen_srt.name})")
-            else:
-                print(f"错误: --skip-transcribe 但找不到 {qwen_srt.name}")
-                sys.exit(1)
+            print(
+                f"错误: --skip-transcribe 但找不到 {qwen_srt.name}。"
+                "若要使用 corrected/final，请显式传 --subtitle-source PATH。"
+            )
+            sys.exit(1)
         else:
             print(f"\n[1/7] 转录 (已跳过) → {qwen_srt.name}")
 
     # 记录「本该跑却失败」的步骤。跳过不算失败，最后据此决定退出码——
     # 全流程恒 exit 0 会让失败在自动化里完全看不见。
     failures: list[str] = []
+    qc_path = process_dir / f"{stem}.subtitle_qc.md"
 
     # ── 2. 校对 ───────────────────────────────────────────────────────────────
     corrected_srt = None
-    if not args.skip_correct:
+    if explicit_subtitle_source:
+        corrected_srt = None
+        print(f"\n[2/7] 校对已跳过（显式字幕源） → {qwen_srt}")
+    elif not args.skip_correct:
         print("\n[2/7] Codex 字幕校对 + 全文扫描")
-        corrected_srt = correct(
-            qwen_srt,
-            episode_seeds,
-            model=args.model,
-            timeout=args.correction_timeout,
-        )
+        try:
+            corrected_srt = correct(
+                qwen_srt,
+                episode_seeds,
+                model=args.model,
+                timeout=args.correction_timeout,
+            )
+        except ValueError as error:
+            from subtitle_qc import write_parse_error_report
+
+            write_parse_error_report(qc_path, error)
+            print(f"  ✗ 字幕结构无法校对：{error}")
+            print(f"  诊断报告：{qc_path}")
+            sys.exit(1)
         if not corrected_srt:
             failures.append("[2/7] 字幕校对")
     else:
-        corrected_srt = process_dir / f"{stem}.corrected.srt"
-        legacy_corrected = delivery_dir / f"{stem}.corrected.srt"
-        if not corrected_srt.exists() and legacy_corrected.exists():
-            corrected_srt = legacy_corrected
-        if not corrected_srt.exists():
-            corrected_srt = None
-        print(f"\n[2/7] 校对 (已跳过)")
+        corrected_srt = None
+        print(f"\n[2/7] 校对 (已跳过) → 后续使用 {qwen_srt}")
 
     # ── 3. 断句 ───────────────────────────────────────────────────────────────
-    print(f"\n[3/7] 断句处理")
+    if not args.skip_correct and not explicit_subtitle_source and not corrected_srt:
+        print("  ✗ 本次要求字幕精校，但没有生成 corrected.srt；不使用旧稿或原始 ASR 降级。")
+        sys.exit(1)
+
+    print(f"\n[3/7] 断句处理 + 字幕 QC")
     final_srt = None
     final_path = delivery_dir / f"{stem}.final.srt"
-    if corrected_srt and corrected_srt.exists():
-        final_srt = resplit(corrected_srt, output_path=final_path, max_chars=args.max_chars)
-        if not final_srt:
-            failures.append("[3/7] 断句")
-        else:
-            vtt_path = delivery_dir / f"{stem}.final.vtt"
-            qc_path = process_dir / f"{stem}.subtitle_qc.md"
-            if not validate_and_export_subtitles(
-                final_srt, vtt_path, qc_path, max_chars=args.max_chars
-            ):
-                failures.append("[3/7] 字幕 QC")
+    candidate_path = process_dir / f"{stem}.final.candidate.srt"
+    subtitle_source = corrected_srt if corrected_srt and corrected_srt.exists() else qwen_srt
+    explicit_final_reuse = bool(
+        explicit_subtitle_source
+        and explicit_subtitle_source.resolve() == final_path.resolve()
+    )
+    if explicit_final_reuse:
+        candidate_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(subtitle_source, candidate_path)
+        candidate_srt = candidate_path
+        print("  显式复用现有 final.srt：不重切文字，重跑 QC 并生成同文 VTT。")
     else:
-        print("  (无校对文件，跳过)")
-        # 降级：用已有文件顶上。这些可能是上一次运行留下的旧产物，
-        # 必须报出实际用了哪个，否则后续四步会拿着来路不明的字幕继续跑。
-        for candidate in [
-            final_path,
-            process_dir / f"{stem}.corrected.srt",
-            process_dir / f"{stem}.qwen.srt",
-            delivery_dir / f"{stem}.corrected.srt",
-            delivery_dir / f"{stem}.qwen.srt",
-        ]:
-            if candidate.exists():
-                final_srt = candidate
-                age = time.time() - candidate.stat().st_mtime
-                print(f"  ⚠ 降级使用已有文件：{candidate.name}"
-                      f"（{age / 3600:.0f} 小时前生成，非本次产出）", flush=True)
-                if not args.skip_correct:
-                    failures.append(f"[3/7] 断句（降级用了 {candidate.name}）")
-                break
+        try:
+            candidate_srt = resplit(
+                subtitle_source, output_path=candidate_path, max_chars=args.max_chars
+            )
+        except Exception as error:
+            from subtitle_qc import write_parse_error_report
+
+            write_parse_error_report(qc_path, error)
+            print(f"  诊断报告：{qc_path}")
+            print("  ✗ 断句失败；后续内容资产不会生成。")
+            sys.exit(1)
+
+    vtt_path = delivery_dir / f"{stem}.final.vtt"
+    if not validate_and_export_subtitles(
+        candidate_srt,
+        final_path,
+        vtt_path,
+        qc_path,
+        max_chars=args.max_chars,
+    ):
+        print(f"  诊断稿保留在过程目录：{candidate_srt}")
+        print("  既有 final.srt/final.vtt 未被覆盖；后续内容资产不会生成。")
+        sys.exit(1)
+    final_srt = final_path
+    artifact_status: dict[str, str] = {
+        ".final.srt": (
+            "显式复用（本次 QC 通过）"
+            if explicit_final_reuse
+            else "本次生成"
+        ),
+        ".final.vtt": "本次生成",
+    }
 
     # ── 4. 提取高光 ───────────────────────────────────────────────────────────
     highlights_path = None
     if not args.skip_highlights:
         print(f"\n[4/7] 提取视频高光片段")
-        src = final_srt or corrected_srt or qwen_srt
+        src = final_srt
         if src and src.exists():
             highlights_path = highlights(src, output_dir=delivery_dir, stem=stem)
             if not highlights_path:
                 failures.append("[4/7] 高光提取")
+                artifact_status[".highlights.md"] = (
+                    "本次失败（旧文件已保留）"
+                    if (delivery_dir / f"{stem}.highlights.md").exists()
+                    else "本次失败"
+                )
+            else:
+                artifact_status[".highlights.md"] = "本次生成"
         else:
             print("  (无可用 SRT，跳过)")
             failures.append("[4/7] 高光提取（无可用 SRT）")
+            artifact_status[".highlights.md"] = "本次失败"
     else:
         candidate = delivery_dir / f"{stem}.highlights.md"
-        if candidate.exists():
-            highlights_path = candidate
+        artifact_status[".highlights.md"] = (
+            "已跳过（旧文件存在，未复用）"
+            if candidate.exists()
+            else "已跳过"
+        )
         print(f"\n[4/7] 高光提取 (已跳过)")
+
+    # 主流程只消费本次明确生成的高光。skip 或生成失败时，
+    # downstream 回到 final SRT，不自动发现同目录旧文件。
+    discover_highlights = False
 
     # ── 5. 生成文章 ───────────────────────────────────────────────────────────
     article_path = None
     if not args.skip_article:
         print(f"\n[5/7] 生成频道风格文章")
-        src = final_srt or corrected_srt or qwen_srt
+        src = final_srt
         if src and src.exists():
             article_path = article(
                 src,
@@ -576,6 +692,7 @@ def main():
                 article_type=args.article_type,
                 surface=args.article_surface,
                 highlights_path=highlights_path,
+                discover_highlights=discover_highlights,
                 writing_skill_path=(
                     Path(args.article_writing_skill).resolve()
                     if args.article_writing_skill
@@ -584,49 +701,106 @@ def main():
             )
             if not article_path:
                 failures.append("[5/7] 文章生成")
+                artifact_status[".article.md"] = (
+                    "本次失败（旧文件已保留）"
+                    if (delivery_dir / f"{stem}.article.md").exists()
+                    else "本次失败"
+                )
+            else:
+                artifact_status[".article.md"] = "本次生成"
         else:
             print("  (无可用 SRT，跳过)")
             failures.append("[5/7] 文章生成（无可用 SRT）")
+            artifact_status[".article.md"] = "本次失败"
     else:
         candidate = delivery_dir / f"{stem}.article.md"
-        if candidate.exists():
-            article_path = candidate
+        artifact_status[".article.md"] = (
+            "已跳过（旧文件存在，未复用）"
+            if candidate.exists()
+            else "已跳过"
+        )
         print(f"\n[5/7] 文章生成 (已跳过)")
 
     # ── 6. 生成标题 ───────────────────────────────────────────────────────────
     if not args.skip_titles:
         print(f"\n[6/7] 生成播客标题（高光驱动）")
         # 优先用 article，其次 final_srt — highlights 会通过文件名自动检测
-        src = article_path or final_srt or corrected_srt or qwen_srt
+        src = article_path or final_srt
         if src and src.exists():
-            if not titles(src, output_dir=delivery_dir, workspace_dir=process_dir, stem=stem):
+            titles_path = titles(
+                src,
+                output_dir=delivery_dir,
+                workspace_dir=process_dir,
+                stem=stem,
+                highlights_path=highlights_path,
+                discover_highlights=discover_highlights,
+            )
+            if not titles_path:
                 failures.append("[6/7] 标题生成")
+                artifact_status[".titles.md"] = (
+                    "本次失败（旧文件已保留）"
+                    if (delivery_dir / f"{stem}.titles.md").exists()
+                    else "本次失败"
+                )
+            else:
+                artifact_status[".titles.md"] = "本次生成"
         else:
             print("  (无可用来源，跳过)")
             failures.append("[6/7] 标题生成（无可用来源）")
+            artifact_status[".titles.md"] = "本次失败"
     else:
+        artifact_status[".titles.md"] = (
+            "已跳过（旧文件存在）"
+            if (delivery_dir / f"{stem}.titles.md").exists()
+            else "已跳过"
+        )
         print(f"\n[6/7] 标题生成 (已跳过)")
 
     # ── 7. 生成 YouTube description ──────────────────────────────────────────
     if not args.skip_youtube_description:
         print(f"\n[7/7] 生成 YouTube description")
-        src = final_srt or corrected_srt or qwen_srt
+        src = final_srt
         if src and src.exists():
-            if not youtube_description(src, output_dir=delivery_dir, stem=stem):
+            description_path = youtube_description(
+                src, output_dir=delivery_dir, stem=stem
+            )
+            if not description_path:
                 failures.append("[7/7] YouTube description")
+                artifact_status[".youtube-description.txt"] = (
+                    "本次失败（旧文件已保留）"
+                    if (delivery_dir / f"{stem}.youtube-description.txt").exists()
+                    else "本次失败"
+                )
+            else:
+                artifact_status[".youtube-description.txt"] = "本次生成"
         else:
             print("  (无可用 SRT，跳过)")
             failures.append("[7/7] YouTube description（无可用 SRT）")
+            artifact_status[".youtube-description.txt"] = "本次失败"
     else:
+        artifact_status[".youtube-description.txt"] = (
+            "已跳过（旧文件存在）"
+            if (delivery_dir / f"{stem}.youtube-description.txt").exists()
+            else "已跳过"
+        )
         print(f"\n[7/7] YouTube description 生成 (已跳过)")
 
     print(f"\n{'='*55}")
     print("交付文件：")
-    for suf in [".final.srt", ".highlights.md", ".article.md", ".titles.md", ".youtube-description.txt"]:
+    for suf in [
+        ".final.srt",
+        ".final.vtt",
+        ".highlights.md",
+        ".article.md",
+        ".titles.md",
+        ".youtube-description.txt",
+    ]:
         p = delivery_dir / f"{stem}{suf}"
-        print(f"  {'✓' if p.exists() else '✗'} {p.name}")
-    print("过程文件：")
-    for suf in [".qwen.srt", ".corrected.srt"]:
+        status = artifact_status.get(suf, "本次未生成")
+        marker = artifact_marker(status)
+        print(f"  {marker} {p.name} — {status}")
+    print("过程文件（仅显示当前存在性，不代表本次生成）：")
+    for suf in [".qwen.srt", ".corrected.srt", ".final.candidate.srt", ".subtitle_qc.md"]:
         p = process_dir / f"{stem}{suf}"
         print(f"  {'✓' if p.exists() else '✗'} {p.name}")
     title_ws = process_dir / f"{stem}_title_ws"
@@ -638,7 +812,7 @@ def main():
         print(f"✗ {len(failures)} 个步骤未成功完成：")
         for f in failures:
             print(f"    {f}")
-        print("  上面标 ✓ 的产物可能来自此前的运行，不代表本次已生成。")
+        print("  标 ✓ 的文件是本次生成；同名旧文件不能抵消本次的 ✗/→ 状态。")
         print(f"{'='*55}\n")
         sys.exit(1)
 

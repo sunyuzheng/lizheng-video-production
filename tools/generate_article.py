@@ -29,6 +29,9 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from tools.claude_cli import DEFAULT_MODEL, call_claude_file_based
+from tools.atomic_delivery import commit_prepared_files
+from tools.speaker_sidecar import load_validated_speaker_srt
+from tools.srt_text import timed_text_from_srt
 
 
 @dataclass(frozen=True)
@@ -49,7 +52,12 @@ class ResolvedWritingSkill:
 
     @property
     def prompt_context(self) -> str:
-        return f"### {self.label}\n\n{self.content}"
+        return (
+            f"### {self.label}\n\n{self.content}\n\n"
+            "### 自动流水线的 reference 边界\n\n"
+            "本次只注入了上面的 SKILL.md 主文件，没有加载其中按需引用的外部文件。"
+            "只使用已经出现的原则和本期素材，不推测未提供 reference 的内容。"
+        )
 
 
 _WRITING_SKILLS = {
@@ -232,7 +240,7 @@ ARTICLE_INSTRUCTION = """\
 
 article brief 只提供待复核的编辑判断。逐字稿、明确的 speaker labels 和有来源的辅助资料仍是事实源；不要新增材料没有支持的经历、动机、因果或人物定性。各个说话者与资料来源的判断要分清；引用可清理口语，但不改变命题、语气与归因。
 
-写作时仍要理解真实读者，保住材料已有的智识结构；结构可以不整齐。定稿前以三个视角重读：Substance、Voice、Reader。
+写作质量与最终重读方式由当前唯一主责 writing skill 决定；视频流水线不再叠加第二套通用文章规范。
 
 时间戳用于核对证据，只有 `companion` 默认把它们写成观看导航。按当前 surface 直接交付完整 Markdown 成稿，不输出分析过程或“以下是文章”之类的前言。
 """
@@ -247,64 +255,9 @@ _TYPE_EDITORIAL_FOCUS = {
 }
 
 
-# ── SRT 文本提取 ────────────────────────────────────────────────────────────────
-
-def _format_timestamp(seconds: int) -> str:
-    hours = seconds // 3600
-    minutes = (seconds % 3600) // 60
-    if hours:
-        return f"{hours:02d}:{minutes:02d}"
-    return f"{minutes:02d}:00"
-
-
-def _parse_start_seconds(time_line: str) -> int | None:
-    match = re.match(
-        r"^(\d{2}):(\d{2}):(\d{2})[,\.]\d{3}\s*-->",
-        time_line.strip(),
-    )
-    if not match:
-        return None
-    hours, minutes, seconds = (int(part) for part in match.groups())
-    return hours * 3600 + minutes * 60 + seconds
-
-
 def srt_to_timed_text(srt_path: Path, window_seconds: int = 60) -> str:
-    """提取 SRT 文本，并按时间窗口合并，保留可用于文章的粗时间戳。"""
-    content = srt_path.read_text(encoding="utf-8")
-    buckets: dict[int, list[str]] = {}
-    current_start: int | None = None
-    current_lines: list[str] = []
-
-    def flush_current() -> None:
-        nonlocal current_start, current_lines
-        if current_start is None or not current_lines:
-            current_start = None
-            current_lines = []
-            return
-        bucket_start = (current_start // window_seconds) * window_seconds
-        buckets.setdefault(bucket_start, []).append("".join(current_lines))
-        current_start = None
-        current_lines = []
-
-    for raw_line in content.splitlines():
-        line = raw_line.strip()
-        if not line:
-            flush_current()
-            continue
-        if re.match(r"^\d+$", line):
-            continue
-        start_seconds = _parse_start_seconds(line)
-        if start_seconds is not None:
-            flush_current()
-            current_start = start_seconds
-            continue
-        current_lines.append(line)
-    flush_current()
-
-    return "\n".join(
-        f"[{_format_timestamp(start)}] {' '.join(texts)}"
-        for start, texts in sorted(buckets.items())
-    )
+    """严格解析 SRT，并按时间窗口保留文章核对用时间戳。"""
+    return timed_text_from_srt(srt_path, window_seconds=window_seconds)
 
 
 # ── 主函数 ──────────────────────────────────────────────────────────────────────
@@ -323,6 +276,7 @@ def _read_highlights(
     episode_stem: str,
     workspace_dir: Path | None = None,
     highlights_path: Path | None = None,
+    discover_highlights: bool = True,
 ) -> str:
     resolved = _resolve_highlights_path(
         srt_path,
@@ -330,6 +284,7 @@ def _read_highlights(
         episode_stem,
         workspace_dir=workspace_dir,
         highlights_path=highlights_path,
+        discover_highlights=discover_highlights,
     )
     return resolved.read_text(encoding="utf-8") if resolved else ""
 
@@ -340,11 +295,14 @@ def _resolve_highlights_path(
     episode_stem: str,
     workspace_dir: Path | None = None,
     highlights_path: Path | None = None,
+    discover_highlights: bool = True,
 ) -> Path | None:
     if highlights_path is not None:
         if not highlights_path.is_file():
             raise FileNotFoundError(f"指定的 highlights 不存在: {highlights_path}")
         return highlights_path
+    if not discover_highlights:
+        return None
 
     # 交付区是本次 pipeline 刚生成结果的默认位置；工作区只能作最后 fallback，
     # 避免残留的旧 highlights 静默覆盖新产物。
@@ -367,20 +325,14 @@ def _read_speaker_labeled(
     workspace_dir: Path | None = None,
 ) -> str:
     candidates = [
-        output_dir / f"{episode_stem}.speaker_labeled.md",
         output_dir / f"{episode_stem}.speaker_labeled.srt",
-        srt_path.parent / f"{episode_stem}.speaker_labeled.md",
         srt_path.parent / f"{episode_stem}.speaker_labeled.srt",
     ]
     if workspace_dir:
         candidates.extend([
-            workspace_dir / f"{episode_stem}.speaker_labeled.md",
             workspace_dir / f"{episode_stem}.speaker_labeled.srt",
         ])
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate.read_text(encoding="utf-8")
-    return ""
+    return load_validated_speaker_srt(srt_path, candidates)
 
 
 def _read_guest_profile(
@@ -433,6 +385,7 @@ def generate_article(
     article_type: str = "auto",
     surface: str = "auto",
     highlights_path: Path | None = None,
+    discover_highlights: bool = True,
     writing_skill_path: Path | None = None,
 ) -> Path:
     """SRT → 文章，返回输出文件路径"""
@@ -452,6 +405,7 @@ def generate_article(
         episode_stem,
         workspace_dir=process_dir,
         highlights_path=highlights_path,
+        discover_highlights=discover_highlights,
     )
     highlights = (
         resolved_highlights_path.read_text(encoding="utf-8")
@@ -606,11 +560,16 @@ def generate_article(
             encoding="utf-8",
         )
 
-        # 两轮模型都成功后才替换上一次完整产物；失败重跑不会污染旧文章来源。
-        attempt_snapshot_path.replace(writing_skill_snapshot_path)
-        attempt_brief_path.replace(brief_path)
-        attempt_output_path.replace(output_path)
-        attempt_context_path.replace(context_path)
+        # 两轮模型都成功后再成组晋升；任一文件提交失败时
+        # 恢复上一次的 article/brief/context/skill snapshot 完整组合。
+        commit_prepared_files(
+            [
+                (attempt_snapshot_path, writing_skill_snapshot_path),
+                (attempt_brief_path, brief_path),
+                (attempt_output_path, output_path),
+                (attempt_context_path, context_path),
+            ]
+        )
     finally:
         for attempt_path in attempt_paths:
             attempt_path.unlink(missing_ok=True)
@@ -644,7 +603,7 @@ def main() -> None:
     parser.add_argument(
         "--writing-skill",
         default=None,
-        help="显式指定 writing skill 或此前保存的快照，用于固定/重放同一 prompt",
+        help="显式指定 writing skill 或此前保存的主文件；完整复现还需相同代码与素材",
     )
     parser.add_argument(
         "--article-type",

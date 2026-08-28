@@ -1,273 +1,139 @@
 ---
-name: kdb-video-post-production
-description: 给定视频、独立录音或已有字幕，完成双录音漂移对齐、剪前导、社区版压制、本地转写、字幕精校/VTT/QC，并按类型与发布 surface 产出高光、文章、标题、YouTube description、封面和 Circle 草稿；访谈文章由 expert-interview-article 主责，单口文章由 substance-writing-review 主责。需要嘉宾审阅或团队交接时可追加分 tab Google Doc。转写用 mlx-qwen3-asr 1.7B，精校用 Codex CLI，内容生成默认 Claude Code Fable 5、不可用时降级 Codex gpt-5.5。
+name: lizheng-video-editing
+description: 为课代表立正／KDB 视频从原始媒体或已有字幕开始完成转写、精校、断句、VTT/QC，并按需生成高光、文章、标题、YouTube description、封面及发布草稿。适用于用户给出视频、音频或 SRT 并要求一个或多个视频发布资产；纯转写优先用 transcribe，已有可读访谈材料且只写对外文章优先用 expert-interview-article。
 ---
 
-# KDB 视频后期生产 v3
+# Lizheng Video Editing
 
-一段原始录制 → 核心内容资产：**①精校字幕/VTT ②高光 ③文章 ④标题 ⑤YouTube description**；如用户同时给独立录音或要求社区发布，再追加**对齐成片、封面、字幕 QC、Circle 草稿**。
+这套 skill 负责把一期视频的原始材料组织成可靠的字幕和可发布的内容资产。它既不是“每次都跑全套”的固定流水线，也不替文章、品牌或复杂视频设计的专门 skill 做判断。
 
-两条铁律贯穿全程：
-- **确定性优先**：有脚本的环节跑脚本，agent 只做判型、路由、把关和脚本兜不住的部分，不徒手重做脚本已覆盖的工作。
-- **文件为介质**：每一步读文件、写文件，下游只依赖上游的产物文件，不依赖会话内记忆。
+## 先路由，再动手
 
-内容生成引擎：默认 Claude Code `claude-fable-5`（脚本内置）；Fable 5 不可用、超时或没写出文件时，`claude_cli.py` 自动降级到 Codex `gpt-5.5`，产物文件约定不变，降级会在脚本输出里明示。
+| 请求 | 主责 |
+|---|---|
+| KDB 视频／SRT → 字幕、高光、标题、description、封面或组合交付 | 本 skill |
+| 普通音视频只转文字，不需要 KDB 字幕交付规格 | `transcribe` |
+| 已有可读访谈材料，只写对外文章／社区帖 | `expert-interview-article` |
+| 单人口播素材要真正剪成可发布短视频 | `kdb-talking-head-short-production` |
+| 已有成片要做定时重构、动态图形或复杂视觉包装 | `talking-head-recut`／`hyperframes` |
+| 选择 Superlinear logo、颜色和品牌资产 | `superlinear-brand-usage` |
 
-## 第 0 步：判型
+用户只要标题或 description，就只完成该产物；不要为了“完整”生成其余文件。已有字幕时从字幕开始，不重复转写。
 
-先判断这是**单口（口播）**还是**访谈**，这决定后面所有分流：
+## 两个工作原则
 
-| | 单口 | 访谈 |
-|---|---|---|
-| 文章形态 | 默认外发独立文章，像主播状态最好时自己写的 | 由发布 surface 决定；随视频发布时默认伴读，也可写独立文章、社区帖或发布介绍 |
-| 文章去处 | Twitter / LinkedIn / Superlinear 站点 | 社区、站点或随视频发布 |
-| 高光 | 3-4 段核心论断 | 6-8 段，覆盖嘉宾不同侧面 |
-| 封面图 | 默认不做 | 默认做三种带字比例 |
+- **确定性环节交给脚本**：转写、精校调用、断句、时间码、QC、格式导出和可验证的剪辑计划尽量可复现；agent 负责判型、编辑判断、设计和外部平台操作。
+- **文件是状态，不靠会话记忆**：源媒体不覆盖；`.qwen.srt` 只由本次成功且结构有效的 ASR 刷新，不被校对稿或失败运行反写。本期观察、嘉宾资料、writing-skill 快照和中间草稿落进工作区，下游只读取明确文件。
 
-判型依据：发言人数量、对话结构。拿不准直接问用户。实现脚本内部已按此分流，skill 层判型是为了确定交付物组合、并和用户对齐预期。
+## 找到实现目录
 
-## 三个区
+先以本 `SKILL.md` 为起点寻找 `tools/process_video.py`：检查当前目录，再检查上一级。找到的目录记为 `<implementation_root>`。不要依赖某台机器的 Desktop 绝对路径。
 
-- **交付区** = 视频同目录：只放最终交付文件（见「交付物」表）。
-- **工作区** = `<video>_process/`：所有中间产物（raw ASR、corrected 字幕、轮次草稿）。过程文件不当交付，也不覆盖——原始转写稿永远保留。
-- **资料区**（只读引用，更新只走「持续校准」）：
-  - 实现目录 `<implementation_root>`：先检查 `SKILL.md` 同目录是否有 `tools/process_video.py`；没有则检查上一级。这里包含全部脚本 + `data/`（`guideline_kedaibiao.md` 编辑标准、`top_titles.txt` 频道高播标题基准、`channel_vocab.json` 术语库）。不要依赖某台机器上的硬编码 Desktop 路径。
-  - `/Users/sunyuzheng/Desktop/AI/skills/xhs-cover-title/`：小红书封面+标题手艺（含 hot-words、examples）
+文件分区：
 
-## 第 1 步：精校字幕（质量地基）
+- **交付区**：源媒体所在目录，只放用户可直接使用的最终文件。
+- **工作区**：默认 `<video>_process/`，保存 raw ASR、corrected 字幕、QC、brief、context、模型快照和轮次草稿。
+- **资料区**：实现目录的 `data/` 与 `skill/references/`，只在对应任务需要时读取。
 
-后面一切内容都长在这份字幕上，钩子要捞「原文原话」、引用要准，全靠它。
+## 核心字幕链路
 
-- 本地转写必须优先用当前 Python 解释器同目录的 `mlx-qwen3-asr` CLI，再回退到 `PATH` 和 `/opt/homebrew/bin/mlx-qwen3-asr`；模型固定 `Qwen/Qwen3-ASR-1.7B`，带 `--verbose` 保留可见进度。不用静默 Python API（长视频没有进度，容易误判卡住）。CLI 不可用才降级并向用户说明。
-- 转写前收集人名、品牌、产品、工具名、课程名，作为 `--seeds` 注入——这份名单同时是后面小红书路线的「主人公背景」原料，别丢。
-- 字幕精校默认用 Codex CLI，重点修术语、数字、日期、实体和反复识别错误；之后重新断句，适合上屏和剪辑。
+先收集本期人名、公司、产品和技术术语作为 `--seeds`。它们是当期上下文，不自动进入频道长期词库。
 
 ```bash
 cd <implementation_root>
 
-# 完整链路（含高光/文章/标题）
-caffeinate -i venv/bin/python tools/process_video.py /path/to/video.mp4 --seeds 术语1 术语2
+# 全链路
+caffeinate -i venv/bin/python tools/process_video.py /path/to/video.mp4 \
+  --seeds 嘉宾名 公司名 产品名
 
-# 只要字幕
-caffeinate -i venv/bin/python tools/process_video.py /path/to/video.mp4 --seeds 术语1 术语2 --skip-highlights --skip-article --skip-titles
+# 只做字幕、VTT 和 QC
+caffeinate -i venv/bin/python tools/process_video.py /path/to/video.mp4 \
+  --seeds 嘉宾名 公司名 产品名 \
+  --skip-highlights --skip-article --skip-titles --skip-youtube-description
+
+# 已有 corrected/final SRT，显式从该稿重跑 QC 与所需下游
+caffeinate -i venv/bin/python tools/process_video.py /path/to/video.mp4 \
+  --subtitle-source /path/to/video.final.srt --no-seeds
 ```
 
-### 长视频校对与交付质量门（强制）
+字幕链路是：原始转写 → 全文精校 → 先合并再重切 → QC → 从同一 cue 列表导出 VTT。QC 是下游硬门：失败时保留诊断稿和报告，但不把 VTT 当成交付，也不继续生成高光、文章、标题或 description。
 
-- 60 分钟以上默认把 Codex 全文校对超时设为 **900 秒或更高**；`tools/process_video.py --correction-timeout 900`。超时/失败必须硬失败，不能把 raw ASR 冒充 corrected 字幕。
-- LLM 第一轮之后必须做第二轮人工语境精校；每一条替换只能修改目标 cue，提交前同时复核前后各一个 cue，防止跨 cue 搬词、重复或删词。
-- 最终断句后运行 `tools/subtitle_qc.py` 并从同一份 SRT 导出 VTT。硬门：非正时长 0、重叠 0、可见字符 >20 为 0、<0.2 秒为 0、>25 字/秒为 0。
-- 拉丁词、产品名、人名不得被从中间拆成两个 cue；若自动断句留下异常，先回到 corrected SRT 修复边界，再重切，不能在 VTT 单独改一份造成文本分叉。
+长视频、拉丁词边界、时间码和字幕验收见 `references/subtitle-delivery.md`。
 
-详细做法见 `references/longform-community-delivery.md`。
+## 内容资产
 
-### 访谈说话人标注（可选但推荐）
+### 高光
 
-访谈里如果文章/高光需要严格区分「主持人说」和「嘉宾说」，在 `.final.srt` 之后加本地 speaker attribution 层。它不替代 ASR；ASR 负责「说了什么」，diarization 负责「谁在说」。
+`tools/generate_highlights.py` 输出带时间戳的候选片段。高光的原话负责让剪辑师定位；它不要求标题、封面和文章逐字照抄。
 
-安装使用独立环境，避免污染主 ASR venv：
+选择时先找材料真正稀缺的部分：第一手经历、具体机制、重要定义、决策与代价、现场修正，以及只有这个人处在这个位置才看得到的东西。悬念和戏剧性有用，但不能替代 substance。
 
-```bash
-cd <implementation_root>
-/opt/homebrew/bin/python3.11 -m venv venv-diarization
-venv-diarization/bin/pip install -r requirements-diarization.txt
-```
+### 文章
 
-本地 pyannote 模型需要 Hugging Face 接受条款并本机登录一次。不要把 token 写进仓库；只用 `huggingface-cli login` / `hf auth login` 或环境变量。
+视频 skill 只负责准备上下文与文件契约，正文只交给一个主责 writing skill：
 
-最轻量用法是不提供已知声纹，只让 pyannote 区分说话轮次：
-
-```bash
-venv-diarization/bin/python tools/speaker_attribution.py /path/to/video.mp4 \
-  --srt /path/to/video.final.srt \
-  --num-speakers 2
-```
-
-如果需要把 `SPEAKER_00/01` 映射成真实姓名，先从单人音视频生成本地 reference clips。声纹文件是生物识别材料，默认被 `.gitignore` 忽略，不提交：
-
-```bash
-venv-diarization/bin/python tools/build_speaker_refs.py /path/to/solo-speaker-audio.m4a \
-  --speaker host \
-  --out-dir data/speakers/host/refs \
-  --count 3 \
-  --clip-seconds 10
-```
-
-两人访谈中，如果只提供了一个人的声纹，可以用 `--assign-remaining` 给另一个人命名：
-
-```bash
-venv-diarization/bin/python tools/speaker_attribution.py /path/to/video.mp4 \
-  --srt /path/to/video.final.srt \
-  --speaker-ref host=data/speakers/host/refs/host_ref_01_000120s.wav,data/speakers/host/refs/host_ref_02_000360s.wav \
-  --assign-remaining guest \
-  --num-speakers 2
-```
-
-产物：
-- `<video>.speaker_labeled.srt`
-- `<video>.speaker_labeled.md`
-- `<video>_process/<video>.diarization.rttm`
-- `<video>_process/<video>.speaker_turns.json`
-- `<video>_process/<video>.speaker_map.json`
-- `<video>_process/<video>.speaker_qc.md`
-
-下游规则：如果存在 `.speaker_labeled.md`，访谈高光/文章优先读它；只有 speaker label 置信足够时才能写「嘉宾说 / 我问」。`UNKNOWN` / `MIXED` 段落只能写「对话中提到」，不得靠语义强行归因。
-
-### 双独立录音对齐与社区成片（提供 WAV 时强制）
-
-- 不能只求一个开头 offset。至少取前、中、后 3 组锚点，拟合 `external_time = offset + rate × camera_time`；把 recorder clock drift 一起校正，记录 ppm 和锚点残差。
-- 两支单声道录音按真实人物映射到成片左右声道；先识别谁是哪支麦，再做响度、限幅和异常段处理。某支麦爆音/掉线时可平滑降权，不能偷偷回用机内声代替用户指定的 WAV。
-- 剪前导以第一句正式开场为语义点，再选择不会吞字的干净帧/关键帧；字幕、VTT、文章时间戳都以剪后成片 00:00 为基准。
-- Circle 4GB 上限场景目标设为约 **3.8GB** 留封装余量，默认 H.264 1080p、AAC 48kHz；最终必须做 ffprobe 和全片 decode QC。
-
-同步、音频容错、压制和 Circle 交付细节见 `references/longform-community-delivery.md`。
-
-## 第 2 步：高光（独立模块，观众感）
-
-**高光不是文章的选段。** 视频观众的注意力逻辑和文章读者不同——什么能让人停下、什么能让人跳转，要按观看行为判断，所以高光单独成模块，先于文章跑，产物供两个下游使用：文章的证据与定位线索 + 标题/小红书的金句原料。
-
-- 入口：`venv/bin/python tools/generate_highlights.py /path/to/video.final.srt`。脚本会优先采用 SRT 末尾编辑者亲选的高光段（权威来源），没有才全文扫描。
-- 每段高光必须有：可跳转时间戳、原话引用、cognitive gap、为什么值得跳转观看、在整期主线中的位置；访谈另加 vantage point。
-- 不只选戏剧性片段，也要选支撑主线的关键解释、人物选择和反常识判断。
-
-## 第 3 步：文章（一个主责 skill + 明确 surface）
-
-视频 skill 负责组织上游素材；写作阶段只交给一个主责 skill：单口用 `substance-writing-review`，访谈用 `expert-interview-article`。运行时只加载选中的一套 skill，不把两套规范叠加在同一篇稿上。优先采用本机安装的当前 skill；仓内 `data/writing-skills/` 保留自包含的版本化 fallback。每次把实际采用的 skill 原文保存到本期工作区，并把来源、快照路径和 hash 写入 article context；需要复现时显式传回这份快照。
-
-`references/article-editorial-principles.md` 是与主责 writing skill 配合使用的编辑参考，帮助理解真实读者、主线、证据和材料已有的智识结构；它不是第二套写作规范，也不是禁句表。agent 仍需对成稿作编辑判断，不能把 prompt 当成质量保证。
-
-入口：`venv/bin/python tools/generate_article.py /path/to/video.final.srt --article-type interview --surface companion`。脚本先写 `<video>_process/<video>.article-context.json` 和 `<video>.article-brief.md`，再写 `<video>.article.md`。`process_video.py` 会把本次生成的 highlights 路径显式传给文章步骤，避免工作区旧文件覆盖新结果；单独运行时也应先准备本期高光文件，必要时用 `--highlights` 指定，或显式指定类型。
-
-`--surface` 是产物契约：`article`=独立文章，`community`=不依赖视频的社区帖，`companion`=带观看导航的视频伴读／活动回放，`release`=较短发布介绍。`auto` 对访谈采用 `companion`、对单口采用 `article`。只有 `companion` 默认要求在成稿提供时间戳导航。
-
-article brief 的任务是记录编辑判断，不是替正文预制时间线目录。长而散的访谈中，真正的主线可能分散在几次追问、相隔很远的行为和嘉宾的后续修正里。brief 把这种观察当作待验证假设，记录 supporting timestamps、相关反证、人物如何回应，以及采用／放弃后的准确措辞。高光与时间戳负责定位证据，不自动成为文章脊椎。
-
-文章附加资料一律带本期 stem，避免共用目录时串集：嘉宾资料使用 `<video>.guest-profile.md`，采访者观察、人物判断或发布意图使用 `<video>_process/<video>.editorial-notes.md`。脚本不会把观察自动当成事实；第二轮正文仍要回到逐字稿、speaker labels 与有来源的嘉宾资料逐项复核 brief，冲突时丢弃 brief 中的说法。
-
-单口稿要像主播本人状态最好时写出的版本；访谈稿要让人看懂主线、原话与人物选择，而不是做话题摘要。嘉宾带来成熟框架时，保留它的原名、顺序、定义、例子和内部关系。定稿时用 Substance、Voice、Reader 三个视角提高分辨率，不把它们当成逐项打勾的硬门；文章可以有锋芒、停顿和不均匀，只要这些选择来自材料，并让读者理解得更准确。
-
-## 第 4 步：标题（钩子工程，两条路线）
-
-两条路线目标相同：**给人一个点进来的理由**。机制是悬念链——开头种下一个悬念，解决它的同时抛出下一个，一环扣一环；观众撑过第一分钟基本就留下了，所以标题、封面、开头高光的排布值得花全流程里最多的脑筋。
-
-**路线 A · 频道标题**（B站/YouTube/视频号长标题）：
-
-```bash
-venv/bin/python tools/generate_titles.py /path/to/video.article.md
-```
-
-三轮工作流（内部已用 Fable 5），以 `guideline_kedaibiao.md` + `top_titles.txt` 真实高播标题为基准。**agent 不徒手写频道标题**——徒手写绕过了外部基准。
-
-**路线 B · 小红书封面+标题**：调用 `xhs-cover-title` skill，产出 `<video>.xhs.md`（文稿概述 + 金句清单 + 3-5 套封面+标题方案）。喂料方式：
-- 内容原文 = `.final.srt`（必须精校稿——xhs 红线「钩子必须原文原话」依赖字幕准确）
-- 主人公背景 = 第 1 步收集的 seeds 里的身份信息（xhs 要求身份词带具体数字）
-- 金句原料 = `highlights.md` 里的原话引用（高光环节已经替它捞了一半金句）
-
-**两条路线共用的分工原则**：标题不复述高光本身，标题描述高光背后更大的问题——标题让人想点进来，高光让人想看完。
-
-## 第 5 步：封面图（访谈默认）
-
-封面默认带字，文字优先来自 `.xhs.md` 或 `.titles.md` 里的封面建议，不临场硬编。优先用用户提供的现场照、视频截图或关键帧作 reference；如果从视频抽帧，必须检查人物没有被裁掉、表情清晰、文字没有压脸。
-
-生成前必须先读 `skill/references/cover-style-guide.md`，并对照 `skill/references/封面案例/` 的实际图片。目标风格是高点击短视频封面：真实截图作底，黄白黑巨字直接压画面，黑描边/投影保证缩略图可读；只允许硬边黑条/黄条承载小信息。不要做半透明玻璃卡片、圆角海报卡、渐变装饰块或干净留白海报。
-
-默认交付三种比例：
-- `<video>.cover-16x9.png`：16:9，用于 YouTube；`<video>.cover.png` 可保持为同一张 16:9 主封面，方便旧流程取用。
-- `<video>.cover-3x4.png`：3:4，用于小红书；推荐两张截图上下叠放，中间用黄白巨字穿插，不要只做小字信息带。
-- `<video>.cover-4x3.png`：4:3，用于 B站、抖音、视频号。
-
-封面文字分工：
-- 主封面文案：短、狠、可一眼读完，优先用小红书路线 B 选定的封面文案。
-- 副文案：一句内容承诺或原文金句，不要复述标题。
-- 不额外加 logo 或水印；如果源视频截图已经烧进 logo，不要为了“去水印”粗暴涂抹到画面变脏，优先换帧，或用案例风格里的黑条/黄条自然覆盖。
-
-如果用 **Codex CLI 侧的 `imagegen` skill** 做图（不是 Claude skill，产物落在 `$CODEX_HOME/generated_images/`），最终图仍必须拷贝到视频同目录，不能只留在 generated_images。
-
-人物访谈封面使用现场截图时，imagegen 只做背景净化、光线和环境层次；人物身份、脸、发型、表情和姿态都视为不变量。中文标题优先用确定性排版脚本叠加，避免生成模型写错字。输出后按缩略图尺寸再检查一次可读性。
-
-## 第 6 步：YouTube description（发布说明）
-
-入口：`venv/bin/python tools/generate_youtube_description.py /path/to/video.final.srt`，产出 `<video>.youtube-description.txt`。
-
-写法要求：
-- 开宗明义：这期给什么观众带来什么新信息，为什么值得看。
-- 直接、有条理、平实，不写营销号腔、公众号腔或夸张承诺。
-- 章节必须适合 YouTube，时间戳用 `mm:ss`，从 `00:00` 开始。
-- 章节数不要太多，宁可 8-10 个关键节点，也不要逐小节铺满。
-- 时间戳必须根据 `.final.srt` 的真实时间判断，不能编。
-
-## 第 7 步：Google Doc 交付（可选）
-
-当用户需要给嘉宾审阅、给团队交接，或把本期核心产物集中到一个协作文档里，使用 Google Drive/Docs connector 创建一个 tabbed Google Doc。这个步骤不是 `process_video.py` 自动产物，由 agent 在内容生成后执行。
-
-推荐 tabs：
-- `嘉宾预览`：整期主线、给嘉宾看的重点摘要、需要嘉宾确认的问题。
-- `正片伴读文章`：事实和归因检查后的 `.article.md` 整理版。
-- `高光剪辑地图`：`.highlights.md` 的候选片段、vantage point、剪辑组合。
-- `标题封面`：`.titles.md` + `.xhs.md` 的标题、封面文案、投放建议。
-- `发布文案`：`.youtube-description.txt` + 平台简介备选。
-- `归因与制作说明`：speaker map、QC、pipeline 说明、GitHub 状态。
-
-规则：
-- 给嘉宾看的 tabs 必须先做事实和归因 QC；公司名、职位、第一人称归属要二次检查。
-- 如果有 `.speaker_labeled.md`，嘉宾可见内容优先基于它；`UNKNOWN` / `MIXED` 不强行归因。
-- 不把内部 QC、声纹分数、本地路径、GitHub commit 混进 `嘉宾预览`。
-- Google Doc 里不要保留 Markdown 控制符，例如 `**标题**`；用 Google Docs 样式或纯文本。
-- 如果 Google Docs tabs API 不可用，降级为单文档内同名一级标题分区，并向用户说明。
-
-## 第 8 步：Circle 活动回放草稿（按需）
-
-先在本地生成完整帖子草稿，再进入 Circle。通常让视频、伴读文章和真实时间戳章节形成一条连续的阅读路径；讨论问题只有在能把读者带回自身经验时才加入。帖子包装应服务文章主线，避免用一套泛化的「适合谁/你将收获」稀释正文。
-
-上传顺序建议：16:9 thumbnail → 约 3.8GB 社区版 MP4 → 对应 VTT → 正文。平台页面显示上传完成、视频可处理后才保存草稿。**只保存 draft，不发布**；任何发布、群发通知或把草稿变成可见帖子的动作，都必须再次获得用户确认。
-
-## 交付物
-
-| 文件 | 何时生成 | 由谁生成 |
+| 类型 | 主责 writing skill | `surface=auto` |
 |---|---|---|
-| `<video>.final.srt` | 总是 | 脚本流水线 |
-| `<video>.final.vtt` / `<video>_process/*.subtitle_qc.md` | 字幕交付 | subtitle_qc.py |
-| `<video>.speaker_labeled.srt` / `<video>.speaker_labeled.md` | 访谈需要严格归因时 | speaker_attribution.py |
-| `<video>_process/*.diarization.rttm` `*.speaker_turns.json` `*.speaker_map.json` `*.speaker_qc.md` | 跑说话人标注时 | speaker_attribution.py |
-| `<video>_process/*.qwen.srt` `*.corrected.srt` | 总是（工作区） | 脚本流水线 |
-| `<video>.highlights.md` | 视频/访谈发布 | generate_highlights.py |
-| `<video>_process/<video>.article-context.json` / `<video>.writing-skill.md` / `<video>.article-brief.md` | 生成文章时 | generate_article.py |
-| `<video>.article.md` | 发布文章时 | generate_article.py |
-| `<video>.titles.md` | 频道发布 | generate_titles.py |
-| `<video>.youtube-description.txt` | YouTube 发布 | generate_youtube_description.py |
-| `<video>.xhs.md` | 小红书发布 | xhs-cover-title skill |
-| `<video>.cover-16x9.png` / `<video>.cover.png` | 访谈发布默认 | 截图/设计或 imagegen |
-| `<video>.cover-3x4.png` | 小红书发布默认 | 截图/设计或 imagegen |
-| `<video>.cover-4x3.png` | B站/抖音/视频号发布默认 | 截图/设计或 imagegen |
-| Google Doc URL | 嘉宾审阅 / 团队交接时 | Google Drive/Docs connector |
-| `<video>_community.mp4` / `<video>_thumbnail_16x9.jpg` | 社区活动回放 | ffmpeg + 封面流程 |
-| `<video>_Circle活动回放帖子草稿.md` | Circle 草稿发布 | agent 基于伴读文章整理 |
+| 访谈 | `expert-interview-article` | `companion` |
+| 单口 | `substance-writing-review` | `article` |
 
-不为形式完整强行生成用户没要的产物；用户明确说不要标题，就不生成 `.titles.md`。
+`article`、`community`、`companion`、`release` 分别是独立文章、独立社区帖、视频伴读／活动回放和短发布介绍。采访者回看后的观察写入 `<video>_process/<video>.editorial-notes.md`；把它当待验证判断，用逐字稿、反证和人物回应校准，不直接当事实。
 
-## 验收标准
+运行时优先读取本机当前 writing skill，fresh clone 使用 `data/writing-skills/` 的版本化 fallback。实际注入的 `SKILL.md` 主文件、来源和 hash 都写入本期快照与 article context；无工具模型不会自行读取主文件引用的外部 reference，因此主文件必须自包含。
 
-- 本地 ASR 输出里能看到 `mlx-qwen3-asr`、`Qwen/Qwen3-ASR-1.7B` 和进度信息。
-- `.qwen.srt`、`.corrected.srt` 在工作区；`.final.srt` 和各交付物在交付区。
-- `.final.srt` 与 `.final.vtt` 文本逐 cue 一致；字幕 QC 五项硬门全部为 0。
-- 使用独立 WAV 时，对齐报告包含 offset、rate/ppm、前中后残差；成片音轨只来自用户指定 WAV，异常段处理有记录。
-- Circle 社区版不超过平台硬限制并留出余量；ffprobe 规格正确，全片 decode 无错误；草稿未被误发布。
-- 专有名词、数字、日期、工具名全链路一致；字幕断句适合上屏，无 ASR 原始长块。
-- 所有下游内容（高光/文章/标题/小红书）都基于 `.final.srt`，不直接依赖 raw ASR。
-- 文章形态与 surface 一致；嘉宾判断没有被写成主播判断。
-- 访谈 brief 不只是话题清单：若成稿提出跨段判断，能定位到多个支撑片段、相关反证和人物反应，措辞没有超过这些证据。
-- `<video>.article-context.json` 记录实际采用的单口／访谈类型、surface、highlights 路径，以及主责 writing skill 的来源、快照路径和 hash；快照可重放，执行 prompt 只加载一个主责 writing skill。
-- 如果有 `.speaker_labeled.md`：访谈文章/高光按 speaker label 写归因；`UNKNOWN` / `MIXED` 不强行归到任何人。
-- `.xhs.md` 通过 xhs-cover-title 自带的自检清单（≤20 字、零 emoji、封面标题不重复等）。
-- `.youtube-description.txt` 可直接复制到 YouTube：介绍平实、有钩子；章节从 `00:00` 开始；时间戳为 `mm:ss` 且对应字幕真实段落。
-- 封面图三比例齐全：16:9、3:4、4:3；默认带字；人物不被裁掉；文字不压脸、不出界；已保存到视频同目录。
-- 如生成 Google Doc：嘉宾可见内容与内部制作说明分 tab；无 raw Markdown 控制符；敏感事实、公司归属和 speaker attribution 已二次检查。
-- 不泄露 token、cookie 或私有数据。
+### 标题
+
+需要完整包装时运行三轮标题流程，它会参考 `data/top_titles.txt` 与频道 guideline：
+
+```bash
+venv/bin/python tools/generate_titles.py /path/to/video.article.md \
+  --output-dir /path/to/delivery \
+  --workspace-dir /path/to/video_process
+```
+
+用户要求快速 brainstorm 时可以直接提出标题；历史标题是扩展判断的样本，不是只能照着走的模板。标题要让目标观众迅速理解“为什么点开”，人物身份、数字、冲突、问题和结论都是可选手段，取决于当期真正有分量的内容。
+
+频道标题与高光的判断基准见 `../data/guideline_kedaibiao.md`。
+
+### YouTube description
+
+入口：`tools/generate_youtube_description.py <video>.final.srt`。
+
+开头直接给 substance：本期具体讨论什么、出现了哪些难得事实或问题、观众为什么可能关心。不要先写“本期适合谁”“最有价值的一条线”之类元叙述。章节使用真实时间戳，从 `00:00` 开始；通过 validator 后才称为可复制交付稿。
+
+## 条件能力
+
+- **说话人归因**：访谈需要严格区分主持人与嘉宾时，运行本地 diarization／speaker reference 流程；`UNKNOWN`、`MIXED` 不靠语义强行归人。安装与命令见 README。
+- **口头禅、重复与假启动剪辑**：只在用户要求真实剪辑时做，生成可审查 edit plan，再非破坏性渲染。见 `references/filler-cut-editing.md`。
+- **独立 WAV、剪前导、长视频社区版**：这是 agent/ffmpeg recipe，不是 `process_video.py` 的自动能力。见 `references/longform-community-delivery.md`。
+- **封面**：默认交付 YouTube 16:9 与小红书 3:4 两套可直接替换模板；其他比例按发布平台需要。先读 `references/cover-style-guide.md`，品牌资产再路由 `superlinear-brand-usage`。
+- **Google Doc、Circle／社区草稿**：属于外部 connector 或浏览器操作。先在本地准备完整稿与资产，只创建草稿；任何公开发布、通知或群发都需要对最终 payload 和目的地重新确认。
+
+## 交付契约
+
+| 产物 | 含义 |
+|---|---|
+| `<video>.final.srt` / `.final.vtt` | 通过 QC 的同文字幕交付 |
+| `<video>_process/<video>.subtitle_qc.md` | 字幕质量报告 |
+| `<video>.speaker_labeled.srt/.md` | 可选说话人归因稿 |
+| `<video>.highlights.md` | 高光候选与剪辑定位 |
+| `<video>.article.md` | 指定 surface 的文章 |
+| `<video>.titles.md` | 标题候选与推荐 |
+| `<video>.youtube-description.txt` | description 与章节 |
+| `<video>.cover-16x9.png` / `.cover-3x4.png` | 两个平台的独立封面 |
+| `<video>.clean.mp4` | 可选非破坏性清理版；同步字幕需先以 candidate 复核并通过 QC |
+
+过程文件不冒充交付文件。程序失败后即使目录里存在旧文件，也要说明它们是否来自本次运行。
+口头禅剪辑重映射出的 `<video>.clean.candidate.srt` 留在工作区；修正部分相交 cue 的文字并通过 QC 后，才晋升为 `.clean.final.srt/.vtt`。
+
+## 完成前看五件事
+
+1. 专有名词、数字、日期和人物归因是否可追溯且全链路一致。
+2. 字幕 QC 是否真的通过，SRT/VTT 是否来自同一 cue 列表。
+3. 文章、标题与 description 是否抓住了本期独特内容，而不是用熟悉的空泛概念代替理解。
+4. 封面人物身份、表情、文字和品牌资产是否正确，缩略图尺寸下是否仍清楚。
+5. 用户只要求草稿时是否始终停在草稿；发布前是否展示最终 payload、目的地与受众并取得批准。
 
 ## 持续校准
 
-- 发布后的高播标题 → 追加进资料区 `top_titles.txt`，保持路线 A 的外部基准不过时。
-- 小红书发布后实际采用的封面标题和数据 → 走 xhs-cover-title 自己的校准机制（examples.md 追加区）。
-- 用户对高光/文章产物的修改 → 提炼成规则改进 `guideline_kedaibiao.md` 或脚本 prompt（资料区是规则的权威出处，本文件只描述流程，不复述规则全文）。
-- 用户指出 AI 味、受众失焦或成熟框架失真 → 回到具体失败稿与原材料，提炼「什么更好、为什么」并更新 `references/article-editorial-principles.md`、生成 prompt 和编辑示例。避免把一次反馈过拟合成不断增长的禁句表。
-- 反复识别错误的术语：**频道级复用的**（多期会出现）才进 `channel_vocab.json`；单期实体（嘉宾公司名、产品名）走当期 `--seeds`，不进词库。
+把反馈更新到最准确的 owner：字幕机制进脚本与测试，频道标题经验进 `data/guideline_kedaibiao.md`／`top_titles.txt`，文章判断进对应 writing skill，品牌规则进 `superlinear-brand-usage`。记录原理、适用条件和失败模式，不把一次修改追加成永久禁句表。

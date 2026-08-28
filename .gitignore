@@ -25,22 +25,37 @@ env/
 # 生成的字幕文件（本地产物，不纳入版本管理）
 *.qwen.srt
 *.corrected.srt
+*.final.candidate.srt
+*.clean.candidate.srt
 *.final.srt
+*.final.vtt
 *.speaker_labeled.srt
 *.diarization.rttm
 *.speaker_turns.json
 *.speaker_map.json
 *.speaker_qc.md
+*.subtitle_qc.md
 
 # 生成的内容文件（本地产物）
 *.article.md
 *.highlights.md
+*.highlights.candidate.md
 *.titles.md
+*.youtube-description.txt
+*.youtube-description.candidate.txt
+*.youtube-description.invalid.txt
 *.speaker_labeled.md
+*.article-context.json
+*.article-brief.md
+*.writing-skill.md
+*.editorial-notes.md
+*.filler-cuts.json
 *_title_ws/
+channel_vocab.audit.json
+*.channel_vocab.audit.json
 
-# 运行时数据（不纳入版本管理）
-data/correction_candidates.json
+# 本机参考封面（可能含嘉宾肖像／第三方素材，不进入公共仓库）
+skill/references/封面案例/
 
 # macOS
 .DS_Store

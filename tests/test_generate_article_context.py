@@ -16,9 +16,71 @@ from tools.generate_article import (
     resolve_writing_skill,
     WritingSkillSpec,
 )
+from tools import atomic_delivery
 
 
 class GenerateArticleContextTests(unittest.TestCase):
+    def test_article_bundle_commit_failure_restores_all_previous_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            srt_path = root / "episode.final.srt"
+            srt_path.write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\n当前内容\n",
+                encoding="utf-8",
+            )
+            process_dir = root / "episode_process"
+            process_dir.mkdir()
+            article = root / "episode.article.md"
+            brief = process_dir / "episode.article-brief.md"
+            context = process_dir / "episode.article-context.json"
+            snapshot = process_dir / "episode.writing-skill.md"
+            old = {
+                article: "old article",
+                brief: "old brief",
+                context: "old context",
+                snapshot: "old snapshot",
+            }
+            for path, value in old.items():
+                path.write_text(value, encoding="utf-8")
+            writing_skill = root / "interview.SKILL.md"
+            writing_skill.write_text(
+                "---\nname: expert-interview-article\n---\nCURRENT SKILL",
+                encoding="utf-8",
+            )
+
+            def fake_call(_prompt, output_path, **_kwargs):
+                output_path.write_text("new generated content", encoding="utf-8")
+                return "new generated content"
+
+            real_replace = atomic_delivery._replace_path
+
+            def fail_context_commit(source, destination):
+                if (
+                    destination == context.resolve()
+                    and ".backup." not in source.name
+                ):
+                    raise OSError("simulated context commit failure")
+                return real_replace(source, destination)
+
+            with (
+                patch("tools.generate_article.call_claude_file_based", fake_call),
+                patch.object(
+                    atomic_delivery,
+                    "_replace_path",
+                    side_effect=fail_context_commit,
+                ),
+            ):
+                with self.assertRaisesRegex(OSError, "context commit failure"):
+                    generate_article(
+                        srt_path,
+                        article_type="interview",
+                        surface="companion",
+                        writing_skill_path=writing_skill,
+                    )
+
+            for path, value in old.items():
+                self.assertEqual(path.read_text(encoding="utf-8"), value)
+
     def test_writing_skill_context_uses_bundled_fallback_on_fresh_clone(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -44,6 +106,7 @@ class GenerateArticleContextTests(unittest.TestCase):
 
             self.assertIn("test-interview-skill", context)
             self.assertIn("Interview writing guidance", context)
+            self.assertIn("没有加载其中按需引用的外部文件", context)
 
     def test_live_installed_skill_wins_and_is_identified(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -186,6 +249,24 @@ class GenerateArticleContextTests(unittest.TestCase):
             )
 
             self.assertEqual(highlights, "CURRENT")
+
+    def test_failed_upstream_can_disable_stale_highlight_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            srt_path = root / "episode.final.srt"
+            srt_path.write_text("", encoding="utf-8")
+            (root / "episode.highlights.md").write_text(
+                "STALE", encoding="utf-8"
+            )
+
+            highlights = _read_highlights(
+                srt_path,
+                root,
+                "episode",
+                discover_highlights=False,
+            )
+
+            self.assertEqual(highlights, "")
 
     def test_auto_type_uses_highlights_marker(self) -> None:
         article_type, source = resolve_article_type(

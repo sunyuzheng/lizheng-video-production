@@ -7,10 +7,12 @@
 作为 stdin 传给 `codex exec`，并用 `--output-last-message` 捕获最终回复。
 """
 
+import os
 import subprocess
+import tempfile
 from pathlib import Path
 
-DEFAULT_CODEX_MODEL: str | None = None
+DEFAULT_CODEX_MODEL: str | None = os.environ.get("LIZHENG_CODEX_MODEL") or None
 
 
 def call_codex_file_based(
@@ -36,6 +38,7 @@ def call_codex_file_based(
     Raises:
         RuntimeError: Codex 调用失败或未生成输出文件
     """
+    output_path = output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.unlink(missing_ok=True)
 
@@ -45,36 +48,48 @@ def call_codex_file_based(
         f"{prompt}"
     )
 
-    cmd = [
-        "codex",
-        "--ask-for-approval",
-        "never",
-        "--sandbox",
-        "read-only",
-    ]
-    if model:
-        cmd.extend(["--model", model])
-    cmd.extend([
-        "exec",
-        "--skip-git-repo-check",
-        "--ephemeral",
-        "--ignore-rules",
-        "--color",
-        "never",
-        "-C",
-        str(cwd or Path.cwd()),
-        "-o",
-        str(output_path),
-    ])
-    cmd.append("-")
+    temporary_workspace = None
+    if cwd is None:
+        temporary_workspace = tempfile.TemporaryDirectory(prefix="lizheng-codex-text-")
+        run_cwd = Path(temporary_workspace.name)
+    else:
+        run_cwd = cwd.resolve()
 
-    result = subprocess.run(
-        cmd,
-        input=instruction,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
+    try:
+        cmd = [
+            "codex",
+            "--ask-for-approval",
+            "never",
+            "--sandbox",
+            "read-only",
+        ]
+        if model:
+            cmd.extend(["--model", model])
+        cmd.extend([
+            "exec",
+            "--skip-git-repo-check",
+            "--ephemeral",
+            "--ignore-user-config",
+            "--ignore-rules",
+            "--color",
+            "never",
+            "-C",
+            str(run_cwd),
+            "-o",
+            str(output_path),
+            "-",
+        ])
+
+        result = subprocess.run(
+            cmd,
+            input=instruction,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    finally:
+        if temporary_workspace is not None:
+            temporary_workspace.cleanup()
     if result.returncode != 0:
         raise RuntimeError(
             f"codex 失败 (exit {result.returncode}): {result.stderr[:400]}"
