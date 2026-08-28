@@ -57,5 +57,8 @@ channel_vocab.audit.json
 # 本机参考封面（可能含嘉宾肖像／第三方素材，不进入公共仓库）
 skill/references/封面案例/
 
+# v3 及更早版本的本地推断词表；v4 只消费 verified_* 来源
+data/correction_candidates.json
+
 # macOS
 .DS_Store
