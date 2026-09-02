@@ -150,6 +150,174 @@ class TitlePromptPrinciplesTests(unittest.TestCase):
             self.assertIn("TAIL EVIDENCE", text)
             self.assertNotIn("已截断", text)
 
+    def test_round2_receives_timed_source_for_opening_design(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            brief = root / "brief.md"
+            round0 = root / "round0.md"
+            round1 = root / "round1.md"
+            final_out = root / "candidate.md"
+            brief.write_text("BRIEF", encoding="utf-8")
+            round0.write_text("ROUND0", encoding="utf-8")
+            round1.write_text("ROUND1", encoding="utf-8")
+            captured: dict[str, str] = {}
+
+            def fake_call(prompt, output_path, model):
+                captured["prompt"] = prompt
+                output_path.write_text("candidate", encoding="utf-8")
+
+            with patch.object(
+                generate_titles,
+                "call_content_file_based",
+                side_effect=fake_call,
+            ):
+                generate_titles.run_round2(
+                    brief,
+                    round0,
+                    round1,
+                    "",
+                    "[00:12:00,000 --> 00:12:01,000] TIMED_QUOTE_SENTINEL",
+                    False,
+                    final_out,
+                )
+
+            self.assertIn("TIMED_QUOTE_SENTINEL", captured["prompt"])
+
+    def test_round2_does_not_invent_clip_timing_without_srt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            brief = root / "brief.md"
+            round0 = root / "round0.md"
+            round1 = root / "round1.md"
+            final_out = root / "candidate.md"
+            for path in (brief, round0, round1):
+                path.write_text(path.stem, encoding="utf-8")
+            captured: dict[str, str] = {}
+
+            def fake_call(prompt, output_path, model):
+                captured["prompt"] = prompt
+                output_path.write_text("candidate", encoding="utf-8")
+
+            with patch.object(
+                generate_titles,
+                "call_content_file_based",
+                side_effect=fake_call,
+            ):
+                generate_titles.run_round2(
+                    brief,
+                    round0,
+                    round1,
+                    "",
+                    "",
+                    False,
+                    final_out,
+                )
+
+            self.assertIn("不得伪造时间点", captured["prompt"])
+            self.assertIn("host-narrative", captured["prompt"])
+
+    def test_round2_marks_validated_speaker_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = [root / name for name in ("brief.md", "round0.md", "round1.md")]
+            for path in files:
+                path.write_text(path.stem, encoding="utf-8")
+            captured: dict[str, str] = {}
+
+            def fake_call(prompt, output_path, model):
+                captured["prompt"] = prompt
+                output_path.write_text("candidate", encoding="utf-8")
+
+            with patch.object(generate_titles, "call_content_file_based", side_effect=fake_call):
+                generate_titles.run_round2(
+                    files[0],
+                    files[1],
+                    files[2],
+                    "",
+                    "[00:00:00,000 --> 00:00:01,000] HOST: hello",
+                    True,
+                    root / "candidate.md",
+                )
+
+            self.assertIn("已有经过当前 SRT 校验的 speaker label", captured["prompt"])
+
+    def test_cue_timed_source_preserves_exact_in_and_out(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            srt = Path(tmp) / "episode.srt"
+            srt.write_text(
+                "1\n00:00:01,250 --> 00:00:03,750\n精确原话\n",
+                encoding="utf-8",
+            )
+
+            text = generate_titles.cue_timed_text_from_srt(srt)
+
+            self.assertEqual(
+                text,
+                "[00:00:01,250 --> 00:00:03,750] 精确原话",
+            )
+
+    def test_failed_opening_qc_gets_one_repair_before_delivery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            srt = root / "episode.final.srt"
+            srt.write_text(
+                "1\n00:00:00,000 --> 00:00:02,000\n真实原话\n",
+                encoding="utf-8",
+            )
+
+            def artifact(name: str, body: str):
+                def create(*args, **kwargs):
+                    path = root / name
+                    path.write_text(body, encoding="utf-8")
+                    return path
+
+                return create
+
+            def package(opening_quote: str) -> str:
+                return (
+                    "## 首选组合\n"
+                    "**标题：** 标题\n"
+                    "**封面主文案：** 大字\n"
+                    "**封面画面：** 画面\n"
+                    "**观众会追问：** 为什么\n"
+                    "**视频兑现：** 00:00\n"
+                    "**开头衔接：**\n"
+                    "**开头类型：** source-cold-open\n"
+                    f"- **原片：** 00:00:00,000 --> 00:00:02,000｜{opening_quote}\n"
+                    "**进入正片：** 00:00:00,000\n"
+                    "## 备选组合\n备选\n"
+                    "## 放弃的方向\n放弃\n"
+                )
+
+            def invalid_round2(*args, **kwargs):
+                output = args[-1]
+                output.write_text(package("错误引语"), encoding="utf-8")
+                return output
+
+            repair_calls: list[list[str]] = []
+
+            def valid_repair(candidate, errors, opening_source, verified, repaired_out):
+                repair_calls.append(errors)
+                repaired_out.write_text(package("真实原话"), encoding="utf-8")
+                return repaired_out
+
+            with (
+                patch.object(generate_titles, "build_title_brief", side_effect=artifact("brief.md", "brief")),
+                patch.object(generate_titles, "run_round0", side_effect=artifact("round0.md", "round0")),
+                patch.object(generate_titles, "run_round1", side_effect=artifact("round1.md", "round1")),
+                patch.object(generate_titles, "run_round2", side_effect=invalid_round2),
+                patch.object(generate_titles, "repair_round2_opening", side_effect=valid_repair),
+            ):
+                result = generate_titles.generate_titles(
+                    srt,
+                    output_dir=root,
+                    workspace_dir=root / "work",
+                    discover_highlights=False,
+                )
+
+            self.assertEqual(len(repair_calls), 1)
+            self.assertIn("真实原话", result.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

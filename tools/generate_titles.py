@@ -8,6 +8,7 @@ generate_titles.py — 课代表立正播客标题工作流 v7
   - 不用全文概括或“看前 → 看后”统领选题，强段落可以承担整期包装
   - 标题与封面从第一轮就作为同一个信息缺口一起生成
   - 独立 challenger 先避开 brief 和首轮锚定重新选题，再合并候选做可见包装冷测
+  - 终稿把 package-specific cold open 或主持人补录 intro 一并设计，不把一般高光当默认开头
   - 历史高播标题用于校准需求强度，不作为句式模板
   - 默认使用 Codex CLI，失败时降级 Claude；模型由 CLI 默认或环境变量选择
 
@@ -27,7 +28,8 @@ if str(_REPO_ROOT) not in sys.path:
 
 from tools.content_cli import DEFAULT_CONTENT_MODEL, call_content_file_based
 from tools.asset_qc import raise_for_errors, validate_title_output
-from tools.srt_text import timed_text_from_srt
+from tools.speaker_sidecar import find_validated_speaker_srt
+from tools.srt_text import cue_timed_text_from_srt, timed_text_from_srt
 
 # ── 路径 ────────────────────────────────────────────────────────────────────────
 
@@ -217,6 +219,8 @@ ROUND2_PROMPT = """\
 
 {highlights_section}
 
+{opening_source_section}
+
 ## 本期 Packaging Brief
 
 {brief}
@@ -237,17 +241,58 @@ ROUND2_PROMPT = """\
 
 从所有候选中只选一个明确首选，再保留至多四个真正有不同投放理由的备选。排名看观众原有观看动机与本期独有证据的结合、记忆、视觉清晰与内容兑现，不看对全片的覆盖率，也不看事实本身有多传奇。
 
-标题与封面作为不可拆开的组合终审。标题本身要能一口读完、过一会儿仍能复述；能由封面承担的第二项证据就留给封面。封面说明只保留主文案、一个视觉关系和必要的小字。检查现有开头是否会迅速接住封面承诺；若不会，给出一句具体的冷开场／高光调整。
+标题、封面与开头作为一条连续承诺终审。标题本身要能一口读完、过一会儿仍能复述；能由封面承担的第二项证据就留给封面。封面说明只保留主文案、一个视觉关系和必要的小字。
+
+开头先确认观众从标题与封面带进来的同一个问题，再增加一个新的具体事实、矛盾或后果，随后进入第一段实质内容。不要另造无关 hook，也不要在已经声明“这期会讲什么”之后继续堆履历、背景或 roadmap。对访谈，根据完整材料选择更可靠的一条路：
+
+- 若一至数段原片能独立承担确认、加深与进入答案，给出 package-specific cold open 的准确时间点、顺序与保留原话；
+- 若最强 premise 分散在整场、依赖主持人的综合或背景，写一段可直接补录的简短 narrative intro，并指出紧接哪段原片；
+- 只有两条路都真实可行、值得实验时，才给一个明确标注的备选。不要把一般高光列表或“最精彩金句合集”当默认开头。
 
 ## 输出文件格式（这是给剪辑师和主播单独阅读的交付文件，不是给你自己的笔记）
 
 固定三段结构，顺序不可变：
 
-1. `## 首选组合`——置顶，只放一个选择。依次使用独立字段行 `**标题：**`、`**封面主文案：**`、`**封面画面：**`、`**观众会追问：**`、`**视频兑现：**`、`**开头衔接：**`。`观众会追问` 只写标题与封面真正打开的那一个问题，不写受众说明；兑现尽量给时间点或原文线索。
+1. `## 首选组合`——置顶，只放一个选择。依次使用独立字段行 `**标题：**`、`**封面主文案：**`、`**封面画面：**`、`**观众会追问：**`、`**视频兑现：**`、`**开头衔接：**`。`观众会追问` 只写标题与封面真正打开的那一个问题，不写受众说明；兑现尽量给时间点或原文线索。`开头衔接` 下必须另起字段：
+   - `**开头类型：** source-cold-open`、`host-narrative` 或 `hybrid`，只写其中一个机器可读值；
+   - 每段原片各用一行 `- **原片：** HH:MM:SS,mmm --> HH:MM:SS,mmm｜逐字原话`。in/out 必须来自 cue-level SRT，原话连续照抄，不把 speaker label 抄进引语；
+   - 涉及补录时，用一行 `**补录逐字稿：**` 给出可直接录制的完整文字；
+   - 最后用一行 `**进入正片：** HH:MM:SS,mmm`。没有时间线材料时只能写 `待定位`，且首选使用 `host-narrative`。
+   `开头衔接` 不写松散建议。若逐字稿没有经过 speaker attribution 校验，不得把某段声音擅自标作“主持人”或“嘉宾”，只按时间与原话交付。
 2. `## 备选组合`——至多四个，沿用同样字段格式并写明它服务的不同点击动机，不提交同义改写。
 3. `## 放弃的方向`——只记录那些看似合理、最终因平庸、受众太窄、视觉不清或兑现不足而放弃的方向。
 
 交付文件不出现 A1、R2-4、“Round 1 指令”、“看前／看后”等内部分析标签；读者没有看过工作区。补充候选和填补盲区的过程留在工作文件，交付稿只保留可直接判断和执行的包装。
+"""
+
+
+OPENING_REPAIR_PROMPT = """\
+你是剪辑交付 QC 修复员。下面的标题终稿只有开头交付未通过确定性检查。
+
+## QC 错误
+
+{errors}
+
+## 待修复终稿
+
+{candidate}
+
+## 可核对的 cue-level 逐字稿
+
+{opening_source}
+
+---
+
+保留标题、封面、观众问题、视频兑现、备选与放弃方向；只修复首选组合的 `开头衔接`。严格使用这些字段和值：
+
+- `**开头类型：** source-cold-open`、`host-narrative` 或 `hybrid`
+- 每段原片：`- **原片：** HH:MM:SS,mmm --> HH:MM:SS,mmm｜逐字原话`
+- 涉及补录：`**补录逐字稿：** 完整可录文字`
+- `**进入正片：** HH:MM:SS,mmm`；无时间线时为 `待定位`
+
+原片每行的 in 必须覆盖引语第一个字所在 cue，out 必须覆盖最后一个字所在 cue；引语连续照抄，不补写、不改词、不把 speaker label 抄进引语。{attribution_rule}
+
+输出修复后的完整终稿，不解释修复过程。
 """
 
 
@@ -335,6 +380,8 @@ def run_round2(
     round0: Path,
     round1: Path,
     highlights: str,
+    opening_source: str,
+    speaker_attribution_verified: bool,
     final_out: Path,
 ) -> Path:
     r0 = round0.read_text(encoding="utf-8")
@@ -345,8 +392,27 @@ def run_round2(
     else:
         highlights_section = ""
 
+    if opening_source:
+        attribution_note = (
+            "下列 cue 已有经过当前 SRT 校验的 speaker label，可以沿用。"
+            if speaker_attribution_verified
+            else "下列 cue 没有可靠 speaker label；不要把声音归为主持人或嘉宾。"
+        )
+        opening_source_section = (
+            "## 开头定位用完整时间线逐字稿\n\n"
+            f"{attribution_note}\n\n"
+            f"{opening_source}\n\n---\n"
+        )
+    else:
+        opening_source_section = (
+            "## 开头定位材料\n\n"
+            "本次没有提供带时间线逐字稿。首选只能交付 host-narrative，进入正片标为待定位；"
+            "不得伪造时间点、原片引语或说话人归因。\n\n---\n"
+        )
+
     prompt = ROUND2_PROMPT.format(
         highlights_section=highlights_section,
+        opening_source_section=opening_source_section,
         brief=brief.read_text(encoding="utf-8"),
         round0=r0,
         round1=r1,
@@ -356,6 +422,30 @@ def run_round2(
     call_content_file_based(prompt, final_out, model=DEFAULT_CONTENT_MODEL)
     print(f"    ✓ {final_out.name} 已写入")
     return final_out
+
+
+def repair_round2_opening(
+    candidate: Path,
+    errors: list[str],
+    opening_source: str,
+    speaker_attribution_verified: bool,
+    repaired_out: Path,
+) -> Path:
+    attribution_rule = (
+        "逐字稿已有可靠 speaker label，可以沿用。"
+        if speaker_attribution_verified
+        else "逐字稿没有可靠 speaker label，不得把原片声音归为主持人或嘉宾。"
+    )
+    prompt = OPENING_REPAIR_PROMPT.format(
+        errors="\n".join(f"- {error}" for error in errors),
+        candidate=candidate.read_text(encoding="utf-8"),
+        opening_source=opening_source or "（无时间线材料）",
+        attribution_rule=attribution_rule,
+    )
+    print("    Round 2 QC：修复开头 in/out、原话或结构…", flush=True)
+    call_content_file_based(prompt, repaired_out, model=DEFAULT_CONTENT_MODEL)
+    print(f"    ✓ {repaired_out.name} 已写入")
+    return repaired_out
 
 
 # ── 主流程 ──────────────────────────────────────────────────────────────────────
@@ -368,6 +458,8 @@ def generate_titles(
     stem: str | None = None,
     highlights_path: Path | None = None,
     discover_highlights: bool = True,
+    source_srt_path: Path | None = None,
+    speaker_srt_path: Path | None = None,
 ) -> Path:
     episode_stem = stem or content_path.with_suffix("").stem
     for suffix in (".article", ".final", ".corrected", ".qwen"):
@@ -389,6 +481,35 @@ def generate_titles(
         content = content_path.read_text(encoding="utf-8")
     else:
         content = srt_to_text(content_path)
+
+    resolved_source_srt = source_srt_path
+    if resolved_source_srt is None and content_path.suffix.lower() == ".srt":
+        resolved_source_srt = content_path
+    if resolved_source_srt is not None and not resolved_source_srt.is_file():
+        raise FileNotFoundError(f"指定的开头定位 SRT 不存在: {resolved_source_srt}")
+
+    resolved_speaker_srt: Path | None = None
+    if resolved_source_srt is not None:
+        if speaker_srt_path is not None:
+            resolved_speaker_srt = find_validated_speaker_srt(
+                resolved_source_srt, [speaker_srt_path]
+            )
+            if resolved_speaker_srt is None:
+                raise ValueError("指定的 speaker SRT 与当前 source SRT 不一致或没有标签")
+        else:
+            resolved_speaker_srt = find_validated_speaker_srt(
+                resolved_source_srt,
+                [
+                    out_dir / f"{episode_stem}.speaker_labeled.srt",
+                    resolved_source_srt.parent / f"{episode_stem}.speaker_labeled.srt",
+                    workspace_base / f"{episode_stem}.speaker_labeled.srt",
+                ],
+            )
+    opening_source = (
+        cue_timed_text_from_srt(resolved_speaker_srt or resolved_source_srt)
+        if resolved_source_srt is not None
+        else ""
+    )
 
     if highlights_path is not None:
         if not highlights_path.is_file():
@@ -413,9 +534,38 @@ def generate_titles(
         return r1
 
     candidate_out = workspace / "round2_candidate.md"
-    run_round2(brief, r0, r1, highlights, candidate_out)
+    run_round2(
+        brief,
+        r0,
+        r1,
+        highlights,
+        opening_source,
+        resolved_speaker_srt is not None,
+        candidate_out,
+    )
     candidate_text = candidate_out.read_text(encoding="utf-8")
-    raise_for_errors("标题", validate_title_output(candidate_text))
+    validation_errors = validate_title_output(
+        candidate_text,
+        resolved_source_srt,
+        speaker_attribution_verified=resolved_speaker_srt is not None,
+    )
+    if validation_errors:
+        repaired_out = workspace / "round2_candidate_repaired.md"
+        repair_round2_opening(
+            candidate_out,
+            validation_errors,
+            opening_source,
+            resolved_speaker_srt is not None,
+            repaired_out,
+        )
+        candidate_out = repaired_out
+        candidate_text = candidate_out.read_text(encoding="utf-8")
+        validation_errors = validate_title_output(
+            candidate_text,
+            resolved_source_srt,
+            speaker_attribution_verified=resolved_speaker_srt is not None,
+        )
+    raise_for_errors("标题", validation_errors)
     candidate_out.replace(final_out)
     return final_out
 
@@ -437,6 +587,16 @@ def main() -> None:
         default=None,
         help="标题过程文件目录（默认与最终标题同目录）",
     )
+    parser.add_argument(
+        "--source-srt",
+        default=None,
+        help="可选完整带时间 SRT；输入为文章时用于精确设计原片 cold open",
+    )
+    parser.add_argument(
+        "--speaker-srt",
+        default=None,
+        help="可选 speaker_labeled.srt；必须与 --source-srt 的 cue 和文字一致",
+    )
     args = parser.parse_args()
 
     content_path = Path(args.content).resolve()
@@ -451,6 +611,8 @@ def main() -> None:
             stop_at_round=args.round,
             output_dir=Path(args.output_dir).resolve() if args.output_dir else None,
             workspace_dir=Path(args.workspace_dir).resolve() if args.workspace_dir else None,
+            source_srt_path=Path(args.source_srt).resolve() if args.source_srt else None,
+            speaker_srt_path=Path(args.speaker_srt).resolve() if args.speaker_srt else None,
         )
         print(f"  ✓ 标题已写入：{out.name}")
     except Exception as e:

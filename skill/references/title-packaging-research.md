@@ -16,3 +16,14 @@
 ## 对本工作流的综合
 
 “在观众原有观看动机与材料独有证据的交点上找最强可包装点”是结合上述公开方法与课代表立正频道反馈后的编辑综合，不冒充 Colin & Samir 的逐字原话。Information gap 和视觉异常只能说明包装让人看见了一个问题，不能自动证明观众在乎答案；工作流因此把“观看动机是否本来存在”与标题、封面、开头和内容兑现一起检查。
+
+## Ed Lawrence：intro 是包装的延续
+
+- [YouTube's Hard, Until Businesses Write Intros Like This](https://youtu.be/M2XVgiFDbjo)：Lawrence 把 intro 视为 title 与 thumbnail 的下一部分。先根据包装判断观众点开后最想知道什么，迅速确认会兑现，再用一个具体 hook 让好奇继续上升；一旦 setup 已经宣布视频会讲什么，就进入第一段实质内容，不继续堆背景、资历或重复解释。
+- 视频里的“三条短句”、五／八秒预测与“十岁孩子能懂”适合当压缩提醒，不作为本工作流的固定 SLA；片中医疗数字只是演示 hook，不能当事实复用。
+- 本工作流进一步把这个机制迁移到访谈：原片能清楚承接包装时，用 package-specific cold open；最强命题散落在整场时，由主持人补录 narrative intro。这个分流是课代表立正的制作综合，不是 Lawrence 在视频里的原话。
+
+## YouTube 官方可观察信号
+
+- [Measure key moments for audience retention](https://support.google.com/youtube/answer/9314415)：YouTube 把 Intro 定义为首 30 秒后仍在观看的比例，并明确指出较高值可能意味着开头符合标题与封面的预期且保持兴趣。
+- [A/B test titles & thumbnails](https://support.google.com/youtube/answer/16391400)：当前可测试至多三组标题／封面，winner 按 watch time 而非 CTR 单独决定。对本工作流而言，这支持用整条承诺链判断包装，不用高点击掩盖开头失配。

@@ -42,6 +42,14 @@ def _format_window_timestamp(seconds: int) -> str:
     return f"{minutes:02d}:00"
 
 
+def _format_cue_timestamp(seconds: float) -> str:
+    total_ms = round(seconds * 1000)
+    hours, remainder = divmod(total_ms, 3_600_000)
+    minutes, remainder = divmod(remainder, 60_000)
+    whole_seconds, milliseconds = divmod(remainder, 1000)
+    return f"{hours:02d}:{minutes:02d}:{whole_seconds:02d},{milliseconds:03d}"
+
+
 def timed_text_from_srt(path: Path, window_seconds: int = 60) -> str:
     if window_seconds <= 0:
         raise ValueError("window_seconds must be positive")
@@ -55,3 +63,17 @@ def timed_text_from_srt(path: Path, window_seconds: int = 60) -> str:
         f"[{_format_window_timestamp(start)}] {' '.join(texts)}"
         for start, texts in sorted(buckets.items())
     )
+
+
+def cue_timed_text_from_srt(path: Path) -> str:
+    """Return one exact in/out range per cue for edit-decision prompts."""
+    lines: list[str] = []
+    for cue in cues_before_timeline_reset(path):
+        text = " ".join(cue["text"].splitlines()).strip()
+        if not text:
+            continue
+        lines.append(
+            f"[{_format_cue_timestamp(cue['start'])} --> "
+            f"{_format_cue_timestamp(cue['end'])}] {text}"
+        )
+    return "\n".join(lines)

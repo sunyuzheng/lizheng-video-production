@@ -406,6 +406,7 @@ def highlights(srt_path: Path, output_dir: Path, stem: str) -> Path | None:
 
 def titles(
     content_path: Path,
+    source_srt_path: Path,
     output_dir: Path,
     workspace_dir: Path,
     stem: str,
@@ -424,6 +425,7 @@ def titles(
             stem=stem,
             highlights_path=highlights_path,
             discover_highlights=discover_highlights,
+            source_srt_path=source_srt_path,
         )
         elapsed = time.time() - t0
         print(f"  ✓ 标题完成  {elapsed:.0f}s  → {result.name}")
@@ -742,6 +744,7 @@ def main():
         if src and src.exists():
             titles_path = titles(
                 src,
+                source_srt_path=final_srt,
                 output_dir=delivery_dir,
                 workspace_dir=process_dir,
                 stem=stem,

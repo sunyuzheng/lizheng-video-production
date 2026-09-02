@@ -82,17 +82,26 @@ class YoutubeDescriptionQcTests(unittest.TestCase):
 
 
 class TitleQcTests(unittest.TestCase):
-    def test_valid_structure(self) -> None:
-        text = (
+    @staticmethod
+    def _package(opening: str, question_field: str = "观众会追问") -> str:
+        return (
             "## 首选组合\n\n"
             "- **标题：** 一个标题\n"
             "- **封面主文案：** 一句大字\n"
             "- **封面画面：** 一个人物关系\n"
-            "- **观众会追问：** 为什么\n"
+            f"- **{question_field}：** 为什么\n"
             "- **视频兑现：** 00:10\n"
-            "- **开头衔接：** 用对应高光\n\n"
+            "- **开头衔接：**\n"
+            f"{opening}\n\n"
             "## 备选组合\n\n备选\n\n"
             "## 放弃的方向\n\n放弃\n"
+        )
+
+    def test_valid_structure(self) -> None:
+        text = self._package(
+            "- **开头类型：** host-narrative\n"
+            "- **补录逐字稿：** 这是可以直接录制的开头。\n"
+            "- **进入正片：** 待定位"
         )
         self.assertEqual(validate_title_output(text), [])
 
@@ -115,18 +124,91 @@ class TitleQcTests(unittest.TestCase):
         self.assertTrue(any("开头衔接" in error for error in errors))
 
     def test_previous_viewer_question_field_remains_compatible(self) -> None:
-        text = (
-            "## 首选组合\n\n"
-            "- 标题：一个标题\n"
-            "- 封面主文案：一句大字\n"
-            "- 封面画面：一个视觉关系\n"
-            "- 它击中的问题：为什么\n"
-            "- 视频兑现：00:10\n"
-            "- 开头衔接：用对应高光\n\n"
-            "## 备选组合\n\n备选\n\n"
-            "## 放弃的方向\n\n放弃\n"
+        text = self._package(
+            "- 开头类型：host-narrative\n"
+            "- 补录逐字稿：这是可以直接录制的开头。\n"
+            "- 进入正片：待定位",
+            question_field="它击中的问题",
         )
         self.assertEqual(validate_title_output(text), [])
+
+    def test_source_cold_open_checks_exact_range_and_quote(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            srt = Path(tmp) / "episode.srt"
+            srt.write_text(SRT, encoding="utf-8")
+            valid = self._package(
+                "- **开头类型：** source-cold-open\n"
+                "- **原片：** 00:00:00,000 --> 00:00:12,000｜开头\n"
+                "- **进入正片：** 00:00:12,000"
+            )
+            self.assertEqual(validate_title_output(valid, srt), [])
+
+            invalid = valid.replace("｜开头", "｜并不存在的原话")
+            errors = validate_title_output(invalid, srt)
+            self.assertTrue(any("逐字核对" in error for error in errors))
+
+            off_boundary = valid.replace(
+                "00:00:00,000 --> 00:00:12,000",
+                "00:00:01,000 --> 00:00:11,000",
+            )
+            errors = validate_title_output(off_boundary, srt)
+            self.assertTrue(any("cue 起点" in error for error in errors))
+            self.assertTrue(any("cue 终点" in error for error in errors))
+
+    def test_host_narrative_requires_script_and_timed_entry_when_srt_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            srt = Path(tmp) / "episode.srt"
+            srt.write_text(SRT, encoding="utf-8")
+            missing_script = self._package(
+                "- **开头类型：** host-narrative\n"
+                "- **进入正片：** 00:00:12,000"
+            )
+            errors = validate_title_output(missing_script, srt)
+            self.assertTrue(any("补录逐字稿" in error for error in errors))
+
+            valid = self._package(
+                "- **开头类型：** host-narrative\n"
+                "- **补录逐字稿：** 这是可以直接录制的开头。\n"
+                "- **进入正片：** 00:00:12,000"
+            )
+            self.assertEqual(validate_title_output(valid, srt), [])
+
+            unresolved = valid.replace("00:00:12,000", "待定位")
+            errors = validate_title_output(unresolved, srt)
+            self.assertTrue(any("必须给出精确时间点" in error for error in errors))
+
+    def test_hybrid_requires_both_source_clip_and_host_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            srt = Path(tmp) / "episode.srt"
+            srt.write_text(SRT, encoding="utf-8")
+            valid = self._package(
+                "- **开头类型：** hybrid\n"
+                "- **补录逐字稿：** 这是补录。\n"
+                "- **原片：** 00:00:12,000 --> 00:00:30,000｜中段\n"
+                "- **进入正片：** 00:00:30,000"
+            )
+            self.assertEqual(validate_title_output(valid, srt), [])
+
+    def test_no_srt_fallback_rejects_claimed_source_cold_open(self) -> None:
+        source_open = self._package(
+            "- **开头类型：** source-cold-open\n"
+            "- **原片：** 00:00:00,000 --> 00:00:12,000｜开头\n"
+            "- **进入正片：** 待定位"
+        )
+        errors = validate_title_output(source_open)
+        self.assertTrue(any("不能声称原片" in error for error in errors))
+
+    def test_unverified_source_does_not_assign_host_or_guest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            srt = Path(tmp) / "episode.srt"
+            srt.write_text(SRT, encoding="utf-8")
+            text = self._package(
+                "- **开头类型：** source-cold-open\n"
+                "- **原片：** 00:00:00,000 --> 00:00:12,000｜开头\n"
+                "- **进入正片：** 00:00:12,000，接嘉宾回答"
+            )
+            errors = validate_title_output(text, srt)
+            self.assertTrue(any("speaker sidecar" in error for error in errors))
 
 
 if __name__ == "__main__":

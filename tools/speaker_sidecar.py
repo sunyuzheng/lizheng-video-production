@@ -21,8 +21,19 @@ def load_validated_speaker_srt(
     candidates: Iterable[Path],
 ) -> str:
     """Return a sidecar only when its cue timeline and words match source_srt."""
-    if source_srt.suffix.lower() != ".srt":
+    path = find_validated_speaker_srt(source_srt, candidates)
+    if path is None:
         return ""
+    return path.read_text(encoding="utf-8-sig")
+
+
+def find_validated_speaker_srt(
+    source_srt: Path,
+    candidates: Iterable[Path],
+) -> Path | None:
+    """Return the first speaker sidecar whose cue timeline and words still match."""
+    if source_srt.suffix.lower() != ".srt":
+        return None
     source_cues = parse_srt(source_srt)
     seen: set[Path] = set()
     for candidate in candidates:
@@ -51,5 +62,5 @@ def load_validated_speaker_srt(
                 matches = False
                 break
         if matches and prefix_count:
-            return candidate.read_text(encoding="utf-8-sig")
-    return ""
+            return candidate
+    return None

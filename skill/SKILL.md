@@ -70,6 +70,8 @@ caffeinate -i venv/bin/python tools/process_video.py /path/to/video.mp4 \
 
 选择时先找材料真正稀缺的部分：第一手经历、具体机制、重要定义、决策与代价、现场修正，以及只有这个人处在这个位置才看得到的东西。悬念和戏剧性有用，但不能替代 substance。
 
+一般高光是内容发现，不自动等于视频开头。标题与封面定下后，再按当前包装选 cold open：片段应让观众确认自己点对了、让同一个问题更值得追，或直接进入答案；否则即使很精彩，也留在正文。若访谈的最强 premise 分散在多处、没有干净原片能承担这件事，优先给主持人写一段可补录的 narrative intro。
+
 ### 文章
 
 视频 skill 只负责准备上下文与文件契约，正文只交给一个主责 writing skill：
@@ -90,14 +92,17 @@ caffeinate -i venv/bin/python tools/process_video.py /path/to/video.mp4 \
 ```bash
 venv/bin/python tools/generate_titles.py /path/to/video.article.md \
   --output-dir /path/to/delivery \
-  --workspace-dir /path/to/video_process
+  --workspace-dir /path/to/video_process \
+  --source-srt /path/to/video.final.srt
 ```
+
+主流水线会自动把 final SRT 作为开头定位材料，并在存在时采用与之匹配的 speaker sidecar；单独以文章运行时也应传入 final SRT，必要时可显式加 `--speaker-srt`。没有带时间逐字稿时，首选仍可设计主持人补录 intro，但不能声称原片 cold open 已经可执行。没有通过校验的 speaker sidecar 时，不替原片声音强行标注主持人或嘉宾。
 
 用户要求快速 brainstorm 时可以直接提出成套的标题与封面方向。标题不是全文概括；一个由视频充分兑现的强段落，可以比覆盖整期的平庸摘要更适合作主标题。历史标题是扩展判断的样本，不是只能照着走的模板。
 
 频道核心发现受众关心科技、进步、AI 与个人成长，很多人在科技公司工作；高管、学生和创业者是自然延伸。垂直话题仍先找这些人会停下来的入口。嘉宾是 VC，不意味着主标题要服务 VC；人物身份、公司与数字可以成为包装中心，但需要它们本身已有观众看得懂的意义，而不是靠编辑事后迁移。
 
-标题与封面从同一个 premise 一起判断：组合后能否让人在一秒内自然想知道答案，视频又能否充分兑现。若观看动机需要标题之外的一段编辑解释，这个 premise 通常还不适合做主包装。具体判断见 `../data/guideline_kedaibiao.md`；实际制作封面再读 `references/cover-style-guide.md`。
+标题、封面与开头从同一个 premise 一起判断：组合后能否让人在一秒内自然想知道答案，第一段能否立刻确认这份期待并增加一个新张力，视频又能否充分兑现。`<video>.titles.md` 的 `开头衔接` 应给出通过 QC 的 cue-level 原片 cold open、主持人补录 intro 或有理由的 hybrid，而不是泛泛说“用高光开场”。若观看动机需要标题之外的一段编辑解释，这个 premise 通常还不适合做主包装。具体判断见 `../data/guideline_kedaibiao.md`；实际制作封面再读 `references/cover-style-guide.md`。
 
 ### YouTube description
 
