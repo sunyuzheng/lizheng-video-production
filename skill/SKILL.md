@@ -85,7 +85,7 @@ caffeinate -i venv/bin/python tools/process_video.py /path/to/video.mp4 \
 
 ### 标题
 
-需要完整包装时运行三轮标题流程，它会参考 `data/top_titles.txt` 与频道 guideline：
+需要完整包装时运行标题流程：先建立观众认知转变 brief，再经过候选、独立 challenger 与终审；流程会参考 `data/top_titles.txt` 与频道 guideline：
 
 ```bash
 venv/bin/python tools/generate_titles.py /path/to/video.article.md \
@@ -94,6 +94,10 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md \
 ```
 
 用户要求快速 brainstorm 时可以直接提出标题；历史标题是扩展判断的样本，不是只能照着走的模板。标题要让目标观众迅速理解“为什么点开”，人物身份、数字、冲突、问题和结论都是可选手段，取决于当期真正有分量的内容。
+
+写候选前，先说清一个具体的 `看前 → 看后`：哪类观众原本怎样理解或描述问题，视频提供了什么足以改变其判断的新信息。一个厉害人物、一家知名公司或一次早期判断通常先是答案可信度的证据；若拿掉这些名字后说不清观众为什么在意，标题仍停留在人物履历或内容摘要。遇到这种情况要回到材料重新找观众正在付出代价的困惑，不要只给旧标题换更刺激的词。
+
+完整节目还要区分频道较广的发现受众与嘉宾同行／专业子群。用户没有指定垂直投放时，第一名优先选择能被更广受众迁移到自身重要选择、且由整期充分兑现的问题；专业人群很痛但覆盖较窄的角度可以明确作为备选或切片。广泛不等于泛化，不能把视频没有回答的问题硬说成人生道理。
 
 频道标题与高光的判断基准见 `../data/guideline_kedaibiao.md`。
 

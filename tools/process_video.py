@@ -9,7 +9,7 @@ process_video.py v4 — 视频转录 + 字幕校对 + 高光 + 文章 + 标题 +
   3. 断句处理
   4. 提取视频高光候选（数量由材料决定，供编辑与标题流程使用）
   5. 生成频道风格文章
-  6. 生成播客标题（高光驱动，三轮 Codex-first 工作流）
+  6. 生成播客标题（观众认知转变 brief + challenger，Codex-first）
   7. 生成 YouTube description（介绍 + 章节）
 
 用法：
@@ -415,7 +415,7 @@ def titles(
     sys.path.insert(0, str(_TOOLS))
     from generate_titles import generate_titles
     t0 = time.time()
-    print(f"  生成标题（三轮，高光驱动）…", flush=True)
+    print(f"  生成标题（观众认知转变 brief + challenger）…", flush=True)
     try:
         result = generate_titles(
             content_path,
@@ -736,7 +736,7 @@ def main():
 
     # ── 6. 生成标题 ───────────────────────────────────────────────────────────
     if not args.skip_titles:
-        print(f"\n[6/7] 生成播客标题（高光驱动）")
+        print(f"\n[6/7] 生成播客标题（观众认知转变驱动）")
         # 优先用 article，其次 final_srt — highlights 会通过文件名自动检测
         src = article_path or final_srt
         if src and src.exists():

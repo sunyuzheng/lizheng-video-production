@@ -125,6 +125,8 @@ venv/bin/python tools/generate_youtube_description.py /path/to/video.final.srt \
 
 文章按类型只加载一个主责 writing skill：访谈使用 `expert-interview-article`，单口使用 `substance-writing-review`。本机没有当前 skill 时使用 `data/writing-skills/` fallback；其中 `substance-writing-review.md` 同步自公开仓库 `https://github.com/sunyuzheng/substance-writing-review` 的自包含主文件。实际注入的文件、来源和 hash 会保存到本期工作区。自动流水线不会自行读取其中按需引用的外部 reference，因此 fallback 主文件必须能独立承担写作契约。
 
+标题流程会先读取完整文章或带时间线的完整 SRT，保存一份 `title_brief.md`，明确观众看前与看后的判断变化；候选出来后，challenger 会重新读取源材料，允许推翻第一轮，而不是只做措辞润色。最终稿仍需要编辑判断，脚本的多轮输出不等于自动选中了可发布标题。
+
 `surface` 含义：
 
 | 值 | 产物 |
