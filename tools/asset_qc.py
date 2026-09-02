@@ -106,12 +106,21 @@ def validate_title_output(text: str) -> list[str]:
         )
         for line in final_section.splitlines()
     ]
-    for field in ("标题", "封面主文案", "封面画面", "观众会追问", "视频兑现", "开头衔接"):
+    required_fields = (
+        ("标题",),
+        ("封面主文案",),
+        ("封面画面",),
+        ("观众会追问", "它击中的问题"),
+        ("视频兑现",),
+        ("开头衔接",),
+    )
+    for aliases in required_fields:
         if not any(
             line == field or line.startswith(field + "：") or line.startswith(field + ":")
+            for field in aliases
             for line in normalized_lines
         ):
-            errors.append(f"“首选组合”缺少字段：{field}")
+            errors.append(f"“首选组合”缺少字段：{aliases[0]}")
     return errors
 
 

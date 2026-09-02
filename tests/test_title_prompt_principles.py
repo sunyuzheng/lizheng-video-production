@@ -12,7 +12,8 @@ class TitlePromptPrinciplesTests(unittest.TestCase):
             [
                 generate_titles.TITLE_BRIEF_PROMPT,
                 generate_titles.ROUND0_PROMPT,
-                generate_titles.ROUND1_PROMPT,
+                generate_titles.ROUND1_INDEPENDENT_PROMPT,
+                generate_titles.ROUND1_COMPARE_PROMPT,
                 generate_titles.ROUND2_PROMPT,
             ]
         )
@@ -25,37 +26,58 @@ class TitlePromptPrinciplesTests(unittest.TestCase):
         ):
             self.assertNotIn(stale_rule, combined)
 
-    def test_independent_review_receives_current_guideline(self) -> None:
-        self.assertIn("{guideline}", generate_titles.ROUND1_PROMPT)
-        self.assertIn("{content}", generate_titles.ROUND1_PROMPT)
-        self.assertIn("{brief}", generate_titles.ROUND1_PROMPT)
+    def test_independent_challenger_is_not_anchored_by_round0_or_brief(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            brief = workspace / "brief.md"
+            round0 = workspace / "round0.md"
+            brief.write_text("BRIEF_SENTINEL", encoding="utf-8")
+            round0.write_text("ROUND0_SENTINEL", encoding="utf-8")
+            prompts: list[str] = []
 
-    def test_prompts_mine_the_strongest_point_instead_of_summarizing(self) -> None:
-        self.assertIn("一个强点可以只来自整期中的一段", generate_titles.TITLE_BRIEF_PROMPT)
-        self.assertIn("不需要代表全部内容", generate_titles.TITLE_BRIEF_PROMPT)
-        self.assertIn("不要把它翻译成更抽象的行业术语", generate_titles.TITLE_BRIEF_PROMPT)
-        self.assertIn("不要给整期写摘要", generate_titles.ROUND0_PROMPT)
-        self.assertIn("一个只覆盖强段落", generate_titles.ROUND1_PROMPT)
-        self.assertNotIn("看前 → 看后", generate_titles.ROUND0_PROMPT)
-        self.assertNotIn("看前 → 看后", generate_titles.ROUND2_PROMPT)
+            def fake_call(prompt, output_path, model):
+                prompts.append(prompt)
+                output_path.write_text(
+                    "INDEPENDENT_SENTINEL" if len(prompts) == 1 else "REVIEW",
+                    encoding="utf-8",
+                )
 
-    def test_prompts_treat_title_thumbnail_and_payoff_as_one_package(self) -> None:
+            with (
+                patch.object(generate_titles, "load_guideline", return_value="GUIDELINE"),
+                patch.object(generate_titles, "load_top_titles", return_value="TOP_TITLES"),
+                patch.object(generate_titles, "call_content_file_based", side_effect=fake_call),
+            ):
+                result = generate_titles.run_round1(
+                    "CONTENT_SENTINEL",
+                    brief,
+                    round0,
+                    "",
+                    workspace,
+                )
+
+            self.assertEqual(len(prompts), 2)
+            self.assertIn("CONTENT_SENTINEL", prompts[0])
+            self.assertNotIn("BRIEF_SENTINEL", prompts[0])
+            self.assertNotIn("ROUND0_SENTINEL", prompts[0])
+            self.assertIn("INDEPENDENT_SENTINEL", prompts[1])
+            self.assertIn("BRIEF_SENTINEL", prompts[1])
+            self.assertIn("ROUND0_SENTINEL", prompts[1])
+            self.assertEqual(result.name, "round1_review.md")
+            self.assertTrue((workspace / "round1_independent.md").exists())
+
+    def test_title_thumbnail_and_payoff_remain_one_delivery_contract(self) -> None:
         self.assertIn("标题 × 封面组合", generate_titles.ROUND0_PROMPT)
         self.assertIn("观众脑中被打开的那一个问题", generate_titles.ROUND0_PROMPT)
-        self.assertIn("缩小后的封面", generate_titles.ROUND1_PROMPT)
-        self.assertIn("开头有没有很快证明", generate_titles.ROUND1_PROMPT)
+        self.assertIn("缩小后的封面", generate_titles.ROUND1_COMPARE_PROMPT)
         self.assertIn("## 首选组合", generate_titles.ROUND2_PROMPT)
+        self.assertIn("**观众会追问：**", generate_titles.ROUND2_PROMPT)
         self.assertIn("视频兑现", generate_titles.ROUND2_PROMPT)
 
-    def test_prompts_encode_the_real_channel_audience_priority(self) -> None:
+    def test_brief_uses_full_source_and_current_channel_context(self) -> None:
+        self.assertIn("{content}", generate_titles.TITLE_BRIEF_PROMPT)
+        self.assertIn("{guideline}", generate_titles.TITLE_BRIEF_PROMPT)
         self.assertIn("科技、进步、AI 与个人成长", generate_titles.TITLE_BRIEF_PROMPT)
-        self.assertIn("高管、学生和创业者", generate_titles.TITLE_BRIEF_PROMPT)
-        self.assertIn("不因此自动服务那个职业的小圈子", generate_titles.TITLE_BRIEF_PROMPT)
-        self.assertIn("嘉宾是 VC 时，不要把 VC 从业者当默认受众", generate_titles.ROUND2_PROMPT)
-
-    def test_viewer_transformation_is_only_a_payoff_check(self) -> None:
-        self.assertIn("只可用来复核", generate_titles.TITLE_BRIEF_PROMPT)
-        self.assertIn("不把它当作选题中心", generate_titles.TITLE_BRIEF_PROMPT)
+        self.assertNotIn("{round0}", generate_titles.TITLE_BRIEF_PROMPT)
 
     def test_brief_artifact_is_named_for_packaging_work(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

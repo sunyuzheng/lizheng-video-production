@@ -114,6 +114,20 @@ class TitleQcTests(unittest.TestCase):
         self.assertTrue(any("视频兑现" in error for error in errors))
         self.assertTrue(any("开头衔接" in error for error in errors))
 
+    def test_previous_viewer_question_field_remains_compatible(self) -> None:
+        text = (
+            "## 首选组合\n\n"
+            "- 标题：一个标题\n"
+            "- 封面主文案：一句大字\n"
+            "- 封面画面：一个视觉关系\n"
+            "- 它击中的问题：为什么\n"
+            "- 视频兑现：00:10\n"
+            "- 开头衔接：用对应高光\n\n"
+            "## 备选组合\n\n备选\n\n"
+            "## 放弃的方向\n\n放弃\n"
+        )
+        self.assertEqual(validate_title_output(text), [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -85,7 +85,7 @@ caffeinate -i venv/bin/python tools/process_video.py /path/to/video.mp4 \
 
 ### 标题
 
-需要完整包装时运行标题流程：先从整期材料挖出可包装的强点，再把标题、封面与视频兑现位置一起生成，最后由独立 challenger 做冷启动检验；流程会参考 `data/top_titles.txt` 与频道 guideline：
+需要完整包装时运行标题流程：先找观众原有观看动机与本期独有证据的交点，再把标题、封面与视频兑现位置一起生成。另一路 challenger 不看 brief 和首轮答案，先重新选题，再把两组候选放在一起冷启动检验：
 
 ```bash
 venv/bin/python tools/generate_titles.py /path/to/video.article.md \
@@ -93,13 +93,11 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md \
   --workspace-dir /path/to/video_process
 ```
 
-用户要求快速 brainstorm 时可以直接提出成套的标题与封面方向；历史标题是扩展判断的样本，不是只能照着走的模板。标题不是全文概括。先通读材料，寻找最值得记住、最能让人产生“非知道不可”问题的事实、数字、冲突、人物选择或判断；一个由视频充分兑现的强段落，可以比覆盖整期的平庸摘要更适合作主标题。
+用户要求快速 brainstorm 时可以直接提出成套的标题与封面方向。标题不是全文概括；一个由视频充分兑现的强段落，可以比覆盖整期的平庸摘要更适合作主标题。历史标题是扩展判断的样本，不是只能照着走的模板。
 
-频道核心发现受众关心科技、进步、AI 与个人成长，很多人在科技公司工作；高管、学生和创业者是自然延伸。垂直话题仍先找这些人会停下来的入口。嘉宾是 VC，不意味着主标题要服务 VC；人物身份、公司与数字也不固定只能当证据，它们若本身构成反常事实或稀缺入口，就可以成为包装中心。
+频道核心发现受众关心科技、进步、AI 与个人成长，很多人在科技公司工作；高管、学生和创业者是自然延伸。垂直话题仍先找这些人会停下来的入口。嘉宾是 VC，不意味着主标题要服务 VC；人物身份、公司与数字可以成为包装中心，但需要它们本身已有观众看得懂的意义，而不是靠编辑事后迁移。
 
-标题与封面从同一个 premise 一起判断：组合后能否让人在一秒内形成一个清楚问题，封面是否提供一个人物关系、数字或视觉对比而没有提前回答，视频在哪里把它讲透，现有开头是否尽快接住承诺。`看前 → 看后` 只用于复核点击之后有没有真正收获，不再用来要求标题概括整期。具体判断见 `../data/guideline_kedaibiao.md`；实际制作封面再读 `references/cover-style-guide.md`。
-
-频道标题与高光的判断基准见 `../data/guideline_kedaibiao.md`。
+标题与封面从同一个 premise 一起判断：组合后能否让人在一秒内自然想知道答案，视频又能否充分兑现。若观看动机需要标题之外的一段编辑解释，这个 premise 通常还不适合做主包装。具体判断见 `../data/guideline_kedaibiao.md`；实际制作封面再读 `references/cover-style-guide.md`。
 
 ### YouTube description
 
