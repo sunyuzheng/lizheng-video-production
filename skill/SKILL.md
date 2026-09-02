@@ -85,7 +85,7 @@ caffeinate -i venv/bin/python tools/process_video.py /path/to/video.mp4 \
 
 ### 标题
 
-需要完整包装时运行标题流程：先建立观众认知转变 brief，再经过候选、独立 challenger 与终审；流程会参考 `data/top_titles.txt` 与频道 guideline：
+需要完整包装时运行标题流程：先从整期材料挖出可包装的强点，再把标题、封面与视频兑现位置一起生成，最后由独立 challenger 做冷启动检验；流程会参考 `data/top_titles.txt` 与频道 guideline：
 
 ```bash
 venv/bin/python tools/generate_titles.py /path/to/video.article.md \
@@ -93,11 +93,11 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md \
   --workspace-dir /path/to/video_process
 ```
 
-用户要求快速 brainstorm 时可以直接提出标题；历史标题是扩展判断的样本，不是只能照着走的模板。标题要让目标观众迅速理解“为什么点开”，人物身份、数字、冲突、问题和结论都是可选手段，取决于当期真正有分量的内容。
+用户要求快速 brainstorm 时可以直接提出成套的标题与封面方向；历史标题是扩展判断的样本，不是只能照着走的模板。标题不是全文概括。先通读材料，寻找最值得记住、最能让人产生“非知道不可”问题的事实、数字、冲突、人物选择或判断；一个由视频充分兑现的强段落，可以比覆盖整期的平庸摘要更适合作主标题。
 
-写候选前，先说清一个具体的 `看前 → 看后`：哪类观众原本怎样理解或描述问题，视频提供了什么足以改变其判断的新信息。一个厉害人物、一家知名公司或一次早期判断通常先是答案可信度的证据；若拿掉这些名字后说不清观众为什么在意，标题仍停留在人物履历或内容摘要。遇到这种情况要回到材料重新找观众正在付出代价的困惑，不要只给旧标题换更刺激的词。
+频道核心发现受众关心科技、进步、AI 与个人成长，很多人在科技公司工作；高管、学生和创业者是自然延伸。垂直话题仍先找这些人会停下来的入口。嘉宾是 VC，不意味着主标题要服务 VC；人物身份、公司与数字也不固定只能当证据，它们若本身构成反常事实或稀缺入口，就可以成为包装中心。
 
-完整节目还要区分频道较广的发现受众与嘉宾同行／专业子群。用户没有指定垂直投放时，第一名优先选择能被更广受众迁移到自身重要选择、且由整期充分兑现的问题；专业人群很痛但覆盖较窄的角度可以明确作为备选或切片。广泛不等于泛化，不能把视频没有回答的问题硬说成人生道理。
+标题与封面从同一个 premise 一起判断：组合后能否让人在一秒内形成一个清楚问题，封面是否提供一个人物关系、数字或视觉对比而没有提前回答，视频在哪里把它讲透，现有开头是否尽快接住承诺。`看前 → 看后` 只用于复核点击之后有没有真正收获，不再用来要求标题概括整期。具体判断见 `../data/guideline_kedaibiao.md`；实际制作封面再读 `references/cover-style-guide.md`。
 
 频道标题与高光的判断基准见 `../data/guideline_kedaibiao.md`。
 
@@ -124,7 +124,7 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md \
 | `<video>.speaker_labeled.srt/.md` | 可选说话人归因稿 |
 | `<video>.highlights.md` | 高光候选与剪辑定位 |
 | `<video>.article.md` | 指定 surface 的文章 |
-| `<video>.titles.md` | 标题候选与推荐 |
+| `<video>.titles.md` | 首选与备选标题 × 封面组合、兑现位置和开头衔接 |
 | `<video>.youtube-description.txt` | description 与章节 |
 | `<video>.cover-16x9.png` / `.cover-3x4.png` | 两个平台的独立封面 |
 | `<video>.clean.mp4` | 可选非破坏性清理版；同步字幕需先以 candidate 复核并通过 QC |
@@ -143,3 +143,5 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md \
 ## 持续校准
 
 把反馈更新到最准确的 owner：字幕机制进脚本与测试，频道标题经验进 `data/guideline_kedaibiao.md`／`top_titles.txt`，文章判断进对应 writing skill，品牌规则进 `superlinear-brand-usage`。记录原理、适用条件和失败模式，不把一次修改追加成永久禁句表。
+
+只有在维护标题系统或核对外部方法归因时，才读 `references/title-packaging-research.md`；普通标题生成不需要加载它。

@@ -88,7 +88,7 @@ def validate_youtube_description(text: str, srt_path: Path) -> list[str]:
 
 def validate_title_output(text: str) -> list[str]:
     """Validate the stable handoff structure promised by the title prompt."""
-    required = ["## 最终标题", "## 前 5 标题的封面建议", "## 备选"]
+    required = ["## 首选组合", "## 备选组合", "## 放弃的方向"]
     positions = [text.find(header) for header in required]
     errors = [header + " 缺失" for header, pos in zip(required, positions) if pos < 0]
     if errors:
@@ -98,8 +98,20 @@ def validate_title_output(text: str) -> list[str]:
         return errors
 
     final_section = text[positions[0] + len(required[0]) : positions[1]]
-    if not re.search(r"(?m)^\s*(?:\d+[.、)]|[-*])\s*\S", final_section):
-        errors.append("“最终标题”段落没有可识别的候选条目")
+    normalized_lines = [
+        re.sub(
+            r"^[-*]\s*",
+            "",
+            line.strip().replace("**", "").replace("__", ""),
+        )
+        for line in final_section.splitlines()
+    ]
+    for field in ("标题", "封面主文案", "封面画面", "观众会追问", "视频兑现", "开头衔接"):
+        if not any(
+            line == field or line.startswith(field + "：") or line.startswith(field + ":")
+            for line in normalized_lines
+        ):
+            errors.append(f"“首选组合”缺少字段：{field}")
     return errors
 
 

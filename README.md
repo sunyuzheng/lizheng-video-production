@@ -125,7 +125,7 @@ venv/bin/python tools/generate_youtube_description.py /path/to/video.final.srt \
 
 文章按类型只加载一个主责 writing skill：访谈使用 `expert-interview-article`，单口使用 `substance-writing-review`。本机没有当前 skill 时使用 `data/writing-skills/` fallback；其中 `substance-writing-review.md` 同步自公开仓库 `https://github.com/sunyuzheng/substance-writing-review` 的自包含主文件。实际注入的文件、来源和 hash 会保存到本期工作区。自动流水线不会自行读取其中按需引用的外部 reference，因此 fallback 主文件必须能独立承担写作契约。
 
-标题流程会先读取完整文章或带时间线的完整 SRT，保存一份 `title_brief.md`，明确观众看前与看后的判断变化；候选出来后，challenger 会重新读取源材料，允许推翻第一轮，而不是只做措辞润色。最终稿仍需要编辑判断，脚本的多轮输出不等于自动选中了可发布标题。
+标题流程会先读取完整文章或带时间线的完整 SRT，保存一份 `packaging_brief.md`。它不概括整期，而是扫描可包装的强事实、数字、冲突、人物关系和判断，记录核心观众为什么会追问、封面怎样把问题变得可见、视频在哪里兑现。候选从一开始就是标题 × 封面组合；challenger 会重新读取源材料，允许推翻第一轮，而不是只做措辞润色。最终稿仍需要编辑判断，脚本的多轮输出不等于自动选中了可发布标题。
 
 `surface` 含义：
 
@@ -179,7 +179,7 @@ python3 tools/extract_channel_vocab.py \
 | `<video>.speaker_labeled.srt/.md` | 可选说话人归因稿 |
 | `<video>.highlights.md` | 高光、时间戳与剪辑定位 |
 | `<video>.article.md` | 指定 surface 的文章 |
-| `<video>.titles.md` | 标题候选与推荐 |
+| `<video>.titles.md` | 首选与备选标题 × 封面组合、兑现位置和开头衔接 |
 | `<video>.youtube-description.txt` | 已验证的 description 与章节 |
 | `<video>.clean.mp4` | 可选非破坏性清理版；重映射字幕在通过复核与 QC 前仍是 candidate |
 

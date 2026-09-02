@@ -84,16 +84,35 @@ class YoutubeDescriptionQcTests(unittest.TestCase):
 class TitleQcTests(unittest.TestCase):
     def test_valid_structure(self) -> None:
         text = (
-            "## 最终标题\n\n1. 一个标题\n\n"
-            "## 前 5 标题的封面建议\n\n建议\n\n"
-            "## 备选\n\n备选\n"
+            "## 首选组合\n\n"
+            "- **标题：** 一个标题\n"
+            "- **封面主文案：** 一句大字\n"
+            "- **封面画面：** 一个人物关系\n"
+            "- **观众会追问：** 为什么\n"
+            "- **视频兑现：** 00:10\n"
+            "- **开头衔接：** 用对应高光\n\n"
+            "## 备选组合\n\n备选\n\n"
+            "## 放弃的方向\n\n放弃\n"
         )
         self.assertEqual(validate_title_output(text), [])
 
     def test_missing_section_is_explicit(self) -> None:
-        errors = validate_title_output("## 最终标题\n1. 一个标题")
-        self.assertTrue(any("封面建议" in error for error in errors))
-        self.assertTrue(any("备选" in error for error in errors))
+        errors = validate_title_output("## 首选组合\n- 标题：一个标题")
+        self.assertTrue(any("备选组合" in error for error in errors))
+        self.assertTrue(any("放弃的方向" in error for error in errors))
+
+    def test_primary_package_requires_click_and_payoff_fields(self) -> None:
+        text = (
+            "## 首选组合\n\n- 标题：一个标题\n\n"
+            "## 备选组合\n\n备选\n\n"
+            "## 放弃的方向\n\n放弃\n"
+        )
+        errors = validate_title_output(text)
+        self.assertTrue(any("封面主文案" in error for error in errors))
+        self.assertTrue(any("封面画面" in error for error in errors))
+        self.assertTrue(any("观众会追问" in error for error in errors))
+        self.assertTrue(any("视频兑现" in error for error in errors))
+        self.assertTrue(any("开头衔接" in error for error in errors))
 
 
 if __name__ == "__main__":
