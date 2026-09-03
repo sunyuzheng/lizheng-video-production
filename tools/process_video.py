@@ -297,13 +297,23 @@ def warn_if_uncorrected(qwen_srt: Path, corrected_srt: Path, stats: dict) -> Non
     print(f"     再决定是否重跑本步；确认无误后本条可忽略，但需人工精校复核。")
 
 
-def resplit(corrected_srt: Path, output_path: Path, max_chars: int = 20) -> Path | None:
+def resplit(
+    corrected_srt: Path,
+    output_path: Path,
+    max_chars: int = 20,
+    diagnostics: dict | None = None,
+) -> Path | None:
     sys.path.insert(0, str(_TOOLS))
     from resplit_srt import resplit_srt
     t0 = time.time()
     print(f"  断句处理（≤{max_chars}字/条）…", flush=True)
     try:
-        result = resplit_srt(corrected_srt, output_path=output_path, max_chars=max_chars)
+        result = resplit_srt(
+            corrected_srt,
+            output_path=output_path,
+            max_chars=max_chars,
+            diagnostics=diagnostics,
+        )
         elapsed = time.time() - t0
         n = sum(1 for line in result.read_text(encoding="utf-8").split("\n\n") if line.strip())
         print(f"  ✓ 断句完成  {n} 条  {elapsed:.0f}s")
@@ -319,11 +329,22 @@ def validate_and_export_subtitles(
     vtt_path: Path,
     report_path: Path,
     max_chars: int = 20,
+    source_srt: Path | None = None,
+    check_boundary_quality: bool = False,
+    segmentation_diagnostics: dict | None = None,
 ) -> bool:
-    """Validate a candidate and promote a matching SRT/VTT pair on success."""
+    """Validate a candidate and promote a matching SRT/VTT pair on success.
+
+    Auto-generated candidates should enable ``check_boundary_quality``.  An
+    explicitly supplied, already reviewed final can skip that heuristic while
+    still receiving structural checks and optional lexical-stream comparison.
+    """
     sys.path.insert(0, str(_TOOLS))
     from subtitle_qc import (
+        compare_lexical_streams,
         inspect,
+        inspect_boundary_quality,
+        merge_boundary_quality,
         parse_srt,
         promote_subtitle_pair,
         write_parse_error_report,
@@ -336,9 +357,42 @@ def validate_and_export_subtitles(
         write_parse_error_report(report_path, error)
         print(f"  ✗ 字幕 QC 未通过：{error}")
         return False
+    text_integrity = None
+    if source_srt is not None:
+        try:
+            source_cues = parse_srt(source_srt)
+        except ValueError as error:
+            write_parse_error_report(report_path, error)
+            print(f"  ✗ 精校源 SRT 无法解析：{error}")
+            return False
+        text_integrity = compare_lexical_streams(source_cues, cues)
+    provenance_quality = (
+        segmentation_diagnostics
+        if segmentation_diagnostics and "risk" in segmentation_diagnostics
+        else None
+    )
+    candidate_shape = (
+        inspect_boundary_quality(cues, max_chars=max_chars)
+        if check_boundary_quality
+        else None
+    )
+    boundary_quality = merge_boundary_quality(provenance_quality, candidate_shape)
     findings = inspect(cues, max_chars=max_chars, min_duration=0.2, max_cps=25.0)
-    write_report(cues, findings, report_path)
-    failed = sum(len(items) for items in findings.values())
+    write_report(
+        cues,
+        findings,
+        report_path,
+        max_chars=max_chars,
+        min_duration=0.2,
+        max_cps=25.0,
+        text_integrity=text_integrity,
+        boundary_quality=boundary_quality,
+    )
+    failed = (
+        sum(len(items) for items in findings.values())
+        + int(bool(text_integrity and not text_integrity["matches"]))
+        + int(bool(boundary_quality and boundary_quality["risk"]))
+    )
     if failed:
         print(
             "  ✗ 字幕 QC 未通过："
@@ -347,6 +401,13 @@ def validate_and_export_subtitles(
             f"long={len(findings['long'])} "
             f"short={len(findings['short'])} fast={len(findings['fast'])}"
         )
+        if text_integrity and not text_integrity["matches"]:
+            print("     正文字符流与精校源不一致；重断句不得改写、增删正文。")
+        if boundary_quality and boundary_quality["risk"]:
+            print(
+                "     自动断句退化为高比例、接近字数上限的 fallback 边界；"
+                "不可直接交付。"
+            )
         return False
 
     promote_subtitle_pair(candidate_srt, cues, final_srt, vtt_path)
@@ -621,15 +682,20 @@ def main():
         explicit_subtitle_source
         and explicit_subtitle_source.resolve() == final_path.resolve()
     )
+    split_diagnostics = None
     if explicit_final_reuse:
         candidate_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(subtitle_source, candidate_path)
         candidate_srt = candidate_path
         print("  显式复用现有 final.srt：不重切文字，重跑 QC 并生成同文 VTT。")
     else:
+        split_diagnostics = {}
         try:
             candidate_srt = resplit(
-                subtitle_source, output_path=candidate_path, max_chars=args.max_chars
+                subtitle_source,
+                output_path=candidate_path,
+                max_chars=args.max_chars,
+                diagnostics=split_diagnostics,
             )
         except Exception as error:
             from subtitle_qc import write_parse_error_report
@@ -646,6 +712,9 @@ def main():
         vtt_path,
         qc_path,
         max_chars=args.max_chars,
+        source_srt=subtitle_source,
+        check_boundary_quality=not explicit_final_reuse,
+        segmentation_diagnostics=split_diagnostics,
     ):
         print(f"  诊断稿保留在过程目录：{candidate_srt}")
         print("  既有 final.srt/final.vtt 未被覆盖；后续内容资产不会生成。")

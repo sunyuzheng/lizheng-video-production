@@ -65,12 +65,16 @@ class ProcessVideoFailFastTests(unittest.TestCase):
                 )
                 return fresh_qwen
 
-            def fake_resplit(source, output_path, max_chars=20):
+            def fake_resplit(source, output_path, max_chars=20, diagnostics=None):
                 captured["source"] = source
                 output_path.write_text(fresh_qwen.read_text(encoding="utf-8"), encoding="utf-8")
+                if diagnostics is not None:
+                    diagnostics.update({"risk": False})
                 return output_path
 
-            def fake_validate(candidate, final_srt, final_vtt, report, max_chars=20):
+            def fake_validate(
+                candidate, final_srt, final_vtt, report, max_chars=20, **_kwargs
+            ):
                 final_srt.write_text(candidate.read_text(encoding="utf-8"), encoding="utf-8")
                 final_vtt.write_text("WEBVTT\n", encoding="utf-8")
                 return True
@@ -118,11 +122,15 @@ class ProcessVideoFailFastTests(unittest.TestCase):
             (root / "episode.highlights.md").write_text("STALE HIGHLIGHT", encoding="utf-8")
             captured: dict = {}
 
-            def fake_resplit(source, output_path, max_chars=20):
+            def fake_resplit(source, output_path, max_chars=20, diagnostics=None):
                 output_path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+                if diagnostics is not None:
+                    diagnostics.update({"risk": False})
                 return output_path
 
-            def fake_validate(candidate, final_srt, final_vtt, report, max_chars=20):
+            def fake_validate(
+                candidate, final_srt, final_vtt, report, max_chars=20, **_kwargs
+            ):
                 final_srt.write_text(candidate.read_text(encoding="utf-8"), encoding="utf-8")
                 final_vtt.write_text("WEBVTT\n", encoding="utf-8")
                 return True
@@ -258,8 +266,10 @@ class ProcessVideoFailFastTests(unittest.TestCase):
                 "1\n00:00:00,000 --> 00:00:01,000\n测试\n", encoding="utf-8"
             )
 
-            def fake_resplit(_source, output_path, max_chars=20):
+            def fake_resplit(_source, output_path, max_chars=20, diagnostics=None):
                 output_path.write_text(qwen.read_text(encoding="utf-8"), encoding="utf-8")
+                if diagnostics is not None:
+                    diagnostics.update({"risk": False})
                 return output_path
 
             argv = [

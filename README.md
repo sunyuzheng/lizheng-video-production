@@ -101,7 +101,7 @@ caffeinate -i venv/bin/python tools/process_video.py /path/to/video.mp4 \
   --skip-highlights --skip-article --skip-titles --skip-youtube-description
 ```
 
-字幕 QC 是依赖门。失败时保存诊断用 SRT 和 QC 报告，退出非零；不会把失败 VTT 当交付，也不会继续生成下游内容。
+字幕 QC 是依赖门。除结构、时长、字数和阅读速度外，自动 candidate 还会检查重断句前后正文字符流，并筛查连续的机械等长边界；触发时保存诊断用 SRT 和报告、退出非零，不会晋升 SRT/VTT 或继续生成下游。风险筛查不代替人工语义通读，处理方法见 `skill/references/subtitle-delivery.md`。
 
 ### 3. 已有 SRT，只补内容
 

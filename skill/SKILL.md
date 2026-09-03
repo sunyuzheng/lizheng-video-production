@@ -58,7 +58,9 @@ caffeinate -i venv/bin/python tools/process_video.py /path/to/video.mp4 \
   --subtitle-source /path/to/video.final.srt --no-seeds
 ```
 
-字幕链路是：原始转写 → 全文精校 → 先合并再重切 → QC → 从同一 cue 列表导出 VTT。QC 是下游硬门：失败时保留诊断稿和报告，但不把 VTT 当成交付，也不继续生成高光、文章、标题或 description。
+字幕链路是：原始转写 → 全文精校 → 先合并再重切成 candidate → 正文字符流与机械边界风险检查 → 语义断句复核 → 时间／长度 QC → 从同一 cue 列表晋升 SRT 与 VTT。字数上限只是显示约束，不是断句目标；规则脚本产出的等长短句即使结构、时长和阅读速度都合格，也不因此成为可交付字幕。
+
+主流程会拦住连续“接近字数上限、又没有语义标点”的机械装箱形态。触发时保留 candidate 和报告，停止所有下游；按 `references/subtitle-delivery.md` 重建语义边界、校验没有增删改正文并人工通读后，再单独晋升。未触发只代表没有命中这一类风险，不替代人工语义验收。
 
 长视频、拉丁词边界、时间码和字幕验收见 `references/subtitle-delivery.md`。
 
@@ -138,7 +140,7 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md \
 ## 完成前看五件事
 
 1. 专有名词、数字、日期和人物归因是否可追溯且全链路一致。
-2. 字幕 QC 是否真的通过，SRT/VTT 是否来自同一 cue 列表。
+2. 字幕是否按意思而不是按字数断开；机器门与人工语义复核是否都通过，SRT/VTT 是否来自同一 cue 列表。
 3. 文章、标题与 description 是否抓住了本期独特内容，而不是用熟悉的空泛概念代替理解。
 4. 封面人物身份、表情、文字和品牌资产是否正确，缩略图尺寸下是否仍清楚。
 5. 用户只要求草稿时是否始终停在草稿；发布前是否展示最终 payload、目的地与受众并取得批准。

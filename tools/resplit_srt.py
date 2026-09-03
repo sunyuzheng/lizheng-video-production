@@ -37,6 +37,11 @@ MERGE_MAX_GAP = 0.6      # 秒：cue 间停顿超过此值视为真实停顿，�
 MERGE_MAX_CHARS = 200    # 合并窗口字符上限，限制时间戳插值误差累积
 DEFAULT_MAX_CPS = 25.0
 DEFAULT_MIN_DURATION = 0.2
+NEAR_LIMIT_FALLBACK_MIN_RUN = 6
+
+_SENTENCE_END_RE = re.compile(r"[。！？!?](?:[”’\"'）)\]】》〉」』]*)\s*$")
+_CLAUSE_END_RE = re.compile(r"[；;，,：:、.…](?:[”’\"'）)\]】》〉」』]*)\s*$")
+_SOURCE_BREAK_RE = re.compile(r"[。！？!?；;，,：:、.…]")
 
 _LATIN_TOKEN_RE = re.compile(
     r"^[A-Za-z0-9]+(?:['’+_.-][A-Za-z0-9]+)*(?:%|\.com)?$"
@@ -217,9 +222,10 @@ def _merge_windows(chunks: list[dict]) -> list[dict]:
     windows: list[dict] = []
     cur: dict | None = None
 
-    def close():
+    def close(reason: str):
         nonlocal cur
         if cur and cur["text"]:
+            cur["end_reason"] = reason
             windows.append(cur)
         cur = None
 
@@ -234,15 +240,20 @@ def _merge_windows(chunks: list[dict]) -> list[dict]:
 
         if cur is not None:
             gap = t_start - cur["end"]
-            if (
-                gap > MERGE_MAX_GAP
-                or gap < -MERGE_MAX_GAP
-                or len(cur["text"]) + n > MERGE_MAX_CHARS
-            ):
-                close()
+            if gap > MERGE_MAX_GAP:
+                close("pause_window")
+            elif gap < -MERGE_MAX_GAP:
+                close("timestamp_discontinuity")
+            elif len(cur["text"]) + n > MERGE_MAX_CHARS:
+                close("merge_size_cap")
 
         if cur is None:
-            cur = {"text": "", "char_starts": [], "end": t_end}
+            cur = {
+                "text": "",
+                "char_starts": [],
+                "end": t_end,
+                "end_reason": None,
+            }
 
         if _needs_space(cur["text"], text):
             cur["text"] += " "
@@ -251,8 +262,126 @@ def _merge_windows(chunks: list[dict]) -> list[dict]:
         cur["char_starts"].extend(starts)
         cur["end"] = t_end
 
-    close()
+    close("source_end")
     return windows
+
+
+def _boundary_source(segment: str, *, is_last: bool, window_reason: str) -> str:
+    """Describe why a segment boundary exists without changing split behavior."""
+    if _SENTENCE_END_RE.search(segment):
+        return "sentence_punct"
+    if _CLAUSE_END_RE.search(segment):
+        return "clause_punct"
+    if is_last:
+        return window_reason
+    return "token_fallback"
+
+
+def _longest_unpunctuated_run(text: str) -> int:
+    longest = 0
+    current = 0
+    for char in text:
+        if _SOURCE_BREAK_RE.match(char):
+            longest = max(longest, current)
+            current = 0
+        elif re.match(r"[\u4e00-\u9fffA-Za-z0-9]", char):
+            current += 1
+    return max(longest, current)
+
+
+def _build_split_diagnostics(
+    chunks: list[dict],
+    result: list[dict],
+    boundary_sources: list[str],
+    *,
+    max_chars: int,
+) -> dict:
+    """Summarize whether rule-based re-splitting degraded into token packing."""
+    source_text = "".join(chunk["text"] for chunk in chunks)
+    visible_chars = _visible_len(source_text)
+    punctuation_breaks = len(_SOURCE_BREAK_RE.findall(source_text))
+    breaks_per_100 = punctuation_breaks * 100 / max(visible_chars, 1)
+    longest_unpunctuated_run = _longest_unpunctuated_run(source_text)
+
+    # The final source_end is not a choice made by the splitter.  Every other
+    # cue ending is an observable boundary and belongs in the provenance mix.
+    observed = boundary_sources[:-1] if boundary_sources else []
+    fallback_kinds = {"token_fallback", "merge_size_cap"}
+    fallback_positions = [
+        i for i, source in enumerate(observed) if source in fallback_kinds
+    ]
+    fallback_count = len(fallback_positions)
+    fallback_ratio = fallback_count / max(len(observed), 1)
+    near_limit_floor = max(1, max_chars - 2)
+    near_limit_fallback_count = sum(
+        _visible_len(result[i]["text"]) >= near_limit_floor
+        for i in fallback_positions
+    )
+    near_limit_fallback_ratio = near_limit_fallback_count / max(fallback_count, 1)
+    longest_near_limit_fallback_run = 0
+    current_run = 0
+    fallback_position_set = set(fallback_positions)
+    for i in range(len(observed)):
+        is_near_limit_fallback = (
+            i in fallback_position_set
+            and _visible_len(result[i]["text"]) >= near_limit_floor
+        )
+        if is_near_limit_fallback:
+            current_run += 1
+            longest_near_limit_fallback_run = max(
+                longest_near_limit_fallback_run, current_run
+            )
+        else:
+            current_run = 0
+
+    source_counts: dict[str, int] = {}
+    for source in observed:
+        source_counts[source] = source_counts.get(source, 0) + 1
+
+    enough_source = visible_chars >= max(400, 20 * max_chars)
+    low_punctuation = (
+        enough_source
+        and breaks_per_100 < 0.5
+        and longest_unpunctuated_run >= 8 * max_chars
+    )
+    fallback_saturation = (
+        fallback_count >= 10
+        and fallback_ratio >= 0.75
+        and near_limit_fallback_ratio >= 0.60
+    )
+    local_fallback_run = (
+        enough_source
+        and longest_near_limit_fallback_run >= NEAR_LIMIT_FALLBACK_MIN_RUN
+    )
+    reason_codes: list[str] = []
+    if low_punctuation:
+        reason_codes.append("LOW_PUNCTUATION")
+    if fallback_saturation:
+        reason_codes.append("FALLBACK_BOUNDARY_SATURATION")
+    if local_fallback_run:
+        reason_codes.append("NEAR_LIMIT_FALLBACK_RUN")
+
+    # Gate on a continuous bad region.  Whole-video averages remain useful
+    # diagnostics, but they can both hide a local failure and overstate many
+    # isolated fallbacks.
+    requires_semantic_review = local_fallback_run
+    return {
+        "method": "split_provenance",
+        "risk": requires_semantic_review,
+        "requires_semantic_review": requires_semantic_review,
+        "reason_codes": reason_codes,
+        "visible_chars": visible_chars,
+        "punctuation_breaks": punctuation_breaks,
+        "breaks_per_100": breaks_per_100,
+        "longest_unpunctuated_run": longest_unpunctuated_run,
+        "boundary_source_counts": source_counts,
+        "fallback_boundary_count": fallback_count,
+        "fallback_boundary_ratio": fallback_ratio,
+        "near_limit_floor": near_limit_floor,
+        "near_limit_fallback_count": near_limit_fallback_count,
+        "near_limit_fallback_ratio": near_limit_fallback_ratio,
+        "longest_near_limit_fallback_run": longest_near_limit_fallback_run,
+    }
 
 
 def _segment_times(
@@ -353,6 +482,7 @@ def resplit_srt(
     input_path: Path,
     output_path: Path | None = None,
     max_chars: int = DEFAULT_MAX_CHARS,
+    diagnostics: dict | None = None,
 ) -> Path:
     """
     读取 input_path (.corrected.srt 或 .qwen.srt)，
@@ -373,15 +503,36 @@ def resplit_srt(
 
     chunks = _parse_srt(input_path)
     result: list[dict] = []
+    boundary_sources: list[str] = []
 
     for window in _merge_windows(chunks):
         segments = split_text(window["text"], max_chars)
         if not segments:
             continue
-        for seg, (t0, t1) in zip(segments, _segment_times(window, segments)):
+        for segment_index, (seg, (t0, t1)) in enumerate(
+            zip(segments, _segment_times(window, segments))
+        ):
             result.append({"timestamp": _fmt_range(t0, t1), "text": seg})
+            boundary_sources.append(
+                _boundary_source(
+                    seg,
+                    is_last=segment_index == len(segments) - 1,
+                    window_reason=window["end_reason"],
+                )
+            )
 
     result = _repair_display_timing(result)
+
+    if diagnostics is not None:
+        diagnostics.clear()
+        diagnostics.update(
+            _build_split_diagnostics(
+                chunks,
+                result,
+                boundary_sources,
+                max_chars=max_chars,
+            )
+        )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
