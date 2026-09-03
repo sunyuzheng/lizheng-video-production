@@ -16,7 +16,7 @@ def cues_before_timeline_reset(path: Path, reset_tolerance: float = 30.0) -> lis
     for cue in cues:
         if (
             previous_start is not None
-            and cue["start"] + reset_tolerance < previous_start
+            and cue["start"] + reset_tolerance <= previous_start
         ):
             break
         result.append(cue)

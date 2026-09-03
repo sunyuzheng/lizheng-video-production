@@ -39,6 +39,18 @@ class YoutubeDescriptionQcTests(unittest.TestCase):
         )
         self.assertEqual(errors, [])
 
+    def test_appended_preview_timeline_does_not_shrink_main_domain(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            srt = Path(tmp) / "episode.final.srt"
+            srt.write_text(
+                SRT
+                + "\n4\n00:00:00,000 --> 00:00:02,000\n重复预告\n",
+                encoding="utf-8",
+            )
+            description = "介绍\n章节：\n00:00 开场\n00:15 中段\n00:40 结尾\n"
+
+            self.assertEqual(validate_youtube_description(description, srt), [])
+
     def test_requires_zero_strict_order_and_in_range(self) -> None:
         errors = self._validate(
             "介绍\n章节：\n00:05 开场\n00:20 中段\n00:20 重复\n01:20 越界\n"
@@ -154,6 +166,22 @@ class TitleQcTests(unittest.TestCase):
             errors = validate_title_output(off_boundary, srt)
             self.assertTrue(any("cue 起点" in error for error in errors))
             self.assertTrue(any("cue 终点" in error for error in errors))
+
+    def test_source_cold_open_ignores_appended_preview_timeline_reset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            srt = Path(tmp) / "episode.srt"
+            srt.write_text(
+                SRT
+                + "\n4\n00:00:00,000 --> 00:00:02,000\n重复预告\n",
+                encoding="utf-8",
+            )
+            text = self._package(
+                "- **开头类型：** source-cold-open\n"
+                "- **原片：** 00:00:30,000 --> 00:01:00,000｜结尾\n"
+                "- **进入正片：** 00:00:30,000"
+            )
+
+            self.assertEqual(validate_title_output(text, srt), [])
 
     def test_host_narrative_requires_script_and_timed_entry_when_srt_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -7,7 +7,7 @@ import re
 import unicodedata
 from pathlib import Path
 
-from tools.subtitle_qc import parse_srt
+from tools.srt_text import cues_before_timeline_reset
 
 
 class AssetValidationError(RuntimeError):
@@ -112,7 +112,7 @@ def validate_youtube_description(text: str, srt_path: Path) -> list[str]:
     if chapters and chapters[0][1] != 0:
         errors.append(f"第一个章节必须从 00:00 开始，实际 {chapters[0][0]}")
 
-    cues = parse_srt(srt_path)
+    cues = cues_before_timeline_reset(srt_path)
     end_seconds = cues[-1]["end"]
     for position, (stamp, seconds) in enumerate(chapters):
         if seconds > end_seconds + 0.001:
@@ -199,7 +199,7 @@ def validate_title_output(
         return errors
 
     try:
-        cues = parse_srt(source_srt_path)
+        cues = cues_before_timeline_reset(source_srt_path)
     except ValueError as error:
         errors.append(f"开头定位 SRT 无法解析：{error}")
         return errors
