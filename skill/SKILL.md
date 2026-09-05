@@ -91,6 +91,8 @@ caffeinate -i venv/bin/python tools/process_video.py /path/to/video.mp4 \
 
 需要完整包装时运行标题流程：先找观众原有观看动机与本期独有证据的交点，再把标题、封面与视频兑现位置一起生成。另一路 challenger 不看 brief 和首轮答案，先重新选题，再把两组候选放在一起冷启动检验：
 
+先保住原材料中的具体矛盾、动作和对话转折，再提炼观点；已有完整字幕时，摘要或文章不能替代它。候选应显出观众尚不知道或仍想看的东西，警惕把现场问题压成“建立信任／长期主义”等观众以为早懂的道理。先比较少量不同的观看承诺，再磨语言；模型冷读与排序只用于编辑判断，不代表真实观众测试。
+
 ```bash
 venv/bin/python tools/generate_titles.py /path/to/video.article.md \
   --output-dir /path/to/delivery \
@@ -104,7 +106,7 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md \
 
 频道核心发现受众关心科技、进步、AI 与个人成长，很多人在科技公司工作；高管、学生和创业者是自然延伸。垂直话题仍先找这些人会停下来的入口。嘉宾是 VC，不意味着主标题要服务 VC；人物身份、公司与数字可以成为包装中心，但需要它们本身已有观众看得懂的意义，而不是靠编辑事后迁移。
 
-标题、封面与开头从同一个 premise 一起判断：组合后能否让人在一秒内自然想知道答案，第一段能否立刻确认这份期待并增加一个新张力，视频又能否充分兑现。`<video>.titles.md` 的 `开头衔接` 应给出通过 QC 的 cue-level 原片 cold open、主持人补录 intro 或有理由的 hybrid，而不是泛泛说“用高光开场”。若观看动机需要标题之外的一段编辑解释，这个 premise 通常还不适合做主包装。具体判断见 `../data/guideline_kedaibiao.md`；实际制作封面再读 `references/cover-style-guide.md`。
+标题、封面与开头从同一个 premise 一起判断：组合后能否迅速显出值得花时间的回报，第一段能否确认并开始兑现这份期待。实用价值、向往、人物兴趣和情感体验都可以驱动观看，不必统一制造焦虑或悬念；可以透露结论，只要过程、证据、反例或体验仍值得看。`<video>.titles.md` 的 `开头衔接` 应给出通过 QC 的 cue-level 原片 cold open、主持人补录 intro 或有理由的 hybrid，而不是泛泛说“用高光开场”。正文缺少关键兑现时，明确指出需要补的答案、案例或推演，或改用可兑现的承诺；开头不能替代缺失的正文。若观看动机需要标题之外的一段编辑解释，这个 premise 通常还不适合做主包装。具体判断见 `../data/guideline_kedaibiao.md`；实际制作封面再读 `references/cover-style-guide.md`。
 
 ### YouTube description
 

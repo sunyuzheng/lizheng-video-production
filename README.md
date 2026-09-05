@@ -126,7 +126,7 @@ venv/bin/python tools/generate_youtube_description.py /path/to/video.final.srt \
 
 文章按类型只加载一个主责 writing skill：访谈使用 `expert-interview-article`，单口使用 `substance-writing-review`。本机没有当前 skill 时使用 `data/writing-skills/` fallback；其中 `substance-writing-review.md` 同步自公开仓库 `https://github.com/sunyuzheng/substance-writing-review` 的自包含主文件。实际注入的文件、来源和 hash 会保存到本期工作区。自动流水线不会自行读取其中按需引用的外部 reference，因此 fallback 主文件必须能独立承担写作契约。
 
-标题流程会先读取完整文章或带时间线的完整 SRT，保存一份 `packaging_brief.md`。它不概括整期，也不从最稀奇的事实倒推 relevance；它先找核心观众在这个题材上原本就有的观看动机，再扫描能改变理解的强事实、数字、冲突、人物关系和机制。候选从一开始就是标题 × 封面组合。独立 challenger 在看见 brief 和首轮候选之前先重读源材料、另做一套候选，下一轮才把两套方案放在一起冷测，以减少首轮锚定。输入文章时，`--source-srt` 另外提供逐字稿和时间码，只用于精确设计原片开头；主流程会自动传入本次 final SRT。
+标题流程会先读取完整文章或带时间线的完整 SRT，保存一份 `packaging_brief.md`。它不概括整期，也不从最稀奇的事实倒推 relevance；它先找核心观众在这个题材上原本就有的观看动机，再扫描能改变理解的强事实、数字、冲突、人物关系和机制，保住可能被摘要磨平的现场问题。候选从一开始就是标题 × 封面组合，先比较不同观看承诺，再磨措辞。独立 challenger 在看见 brief 和首轮候选之前先重读源材料、另做一套候选，下一轮才把两套方案放在一起冷读，以减少首轮锚定；这种模型判断不是观众实测。输入文章并传入 `--source-srt` 时，brief 与 challenger 都优先读取完整逐字稿，文章作为辅助；同一 SRT 另为终审提供 cue-level 开头定位。主流程会自动传入本次 final SRT，终审也直接读取当前频道 guideline。
 
 终稿还会把开头当作同一包装的下一拍：访谈里若有干净原话能确认标题承诺并抬高问题，就给出 cue-level in/out 与可回查原话的 package-specific cold open；若最强 premise 需要跨片段综合，则给出可补录的主持人 narrative intro 和进入正片的位置。可用的 `.speaker_labeled.srt` 会自动校验并采用，也可以显式加 `--speaker-srt /path/to/video.speaker_labeled.srt`；没有可靠 sidecar 时不替原片声音强行标注“主持人／嘉宾”。一般高光用于发现 substance，不默认按顺序拼成开场。最终稿仍需要编辑判断，多轮输出不等于自动选中了可发布标题。
 

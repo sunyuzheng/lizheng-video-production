@@ -150,7 +150,42 @@ class TitlePromptPrinciplesTests(unittest.TestCase):
             self.assertIn("TAIL EVIDENCE", text)
             self.assertNotIn("已截断", text)
 
-    def test_round2_receives_timed_source_for_opening_design(self) -> None:
+    def test_article_with_srt_supplies_original_evidence_to_brief_and_challenger(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            article = root / "episode.article.md"
+            article.write_text("ARTICLE_INTERPRETATION", encoding="utf-8")
+            source_srt = root / "episode.final.srt"
+            source_srt.write_text(
+                "1\n00:00:00,000 --> 00:00:10,000\n"
+                + ("前" * 6500)
+                + "\n\n2\n00:12:00,000 --> 00:12:05,000\nORIGINAL_TAIL_EVIDENCE\n",
+                encoding="utf-8",
+            )
+            prompts: list[str] = []
+
+            def fake_call(prompt, output_path, model):
+                prompts.append(prompt)
+                output_path.write_text("DERIVED_OUTPUT", encoding="utf-8")
+
+            with patch.object(generate_titles, "call_content_file_based", side_effect=fake_call):
+                generate_titles.generate_titles(
+                    article,
+                    source_srt_path=source_srt,
+                    stop_at_round=1,
+                    discover_highlights=False,
+                )
+
+            self.assertEqual(len(prompts), 4)
+            for prompt in (prompts[0], prompts[2]):
+                self.assertIn("ORIGINAL_TAIL_EVIDENCE", prompt)
+                self.assertIn("ARTICLE_INTERPRETATION", prompt)
+                self.assertLess(
+                    prompt.index("ORIGINAL_TAIL_EVIDENCE"),
+                    prompt.index("ARTICLE_INTERPRETATION"),
+                )
+
+    def test_round2_receives_timed_source_and_current_guideline(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             brief = root / "brief.md"
@@ -166,10 +201,9 @@ class TitlePromptPrinciplesTests(unittest.TestCase):
                 captured["prompt"] = prompt
                 output_path.write_text("candidate", encoding="utf-8")
 
-            with patch.object(
-                generate_titles,
-                "call_content_file_based",
-                side_effect=fake_call,
+            with (
+                patch.object(generate_titles, "call_content_file_based", side_effect=fake_call),
+                patch.object(generate_titles, "load_guideline", return_value="CURRENT_GUIDELINE_SENTINEL"),
             ):
                 generate_titles.run_round2(
                     brief,
@@ -182,6 +216,7 @@ class TitlePromptPrinciplesTests(unittest.TestCase):
                 )
 
             self.assertIn("TIMED_QUOTE_SENTINEL", captured["prompt"])
+            self.assertIn("CURRENT_GUIDELINE_SENTINEL", captured["prompt"])
 
     def test_round2_does_not_invent_clip_timing_without_srt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
