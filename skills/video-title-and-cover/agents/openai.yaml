@@ -1,0 +1,4 @@
+interface:
+  display_name: "视频标题与封面"
+  short_description: "从视频素材中找到值得点击的角度，成对打磨标题与封面，并完成自然可信的封面图"
+  default_prompt: "用 $video-title-and-cover 为这期视频选择有吸引力、能被内容兑现的标题与封面。"

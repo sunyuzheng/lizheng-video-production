@@ -5,7 +5,8 @@
 - `skill/SKILL.md`：任务路由、文件契约与工作流编排；
 - `skill/references/`：只在条件任务中读取的制作说明；
 - `tools/`：可执行、可测试的自动化；
-- `data/`：频道标题基准、术语和 writing-skill fallback；
+- `skills/video-title-and-cover/`：独立封标 skill、编辑正文、制作与案例；
+- `data/`：封标规范兼容链接、频道样本、术语和 writing-skill fallback；
 - `README.md`：fresh clone 安装、CLI 与能力边界。
 
 安装后的 canonical skill name 是 `lizheng-video-editing`。Codex 与 Claude 可以分别把仓库的 `skill/` 链接到：
@@ -20,8 +21,8 @@
 - 访谈文章：运行时优先使用已安装的 `expert-interview-article`，仓内 `data/writing-skills/expert-interview-article.md` 是版本化 fallback。
 - 单口文章：运行时优先使用已安装的 `substance-writing-review`；仓内同名文件同步自公开仓库 `https://github.com/sunyuzheng/substance-writing-review`，作为 fresh clone 的版本化 fallback。
 - 品牌 logo、颜色和资产限制：`superlinear-brand-usage`。
-- 小红书平台专用标题手艺：如果安装了独立的 `xhs-cover-title`，可以作为额外候选来源；主流水线不能依赖用户机器的绝对路径。
-- 标题与封面方法的外部来源和归因：`title-packaging-research.md`；运行时判断仍由频道 guideline 负责。
+- 标题与封面：`video-title-and-cover`；仓内 `skills/video-title-and-cover/` 可独立安装，无需加载整个视频 skill。小红书 `xhs-cover-title` 可作为额外语感参考。
+- 三个旧入口 `data/guideline_kedaibiao.md`、`skill/references/cover-style-guide.md`、`skill/references/title-packaging-research.md` 是仓内相对链接，指向新 skill 的编辑正文、制作规范和研究来源。标题与高光 loader 保持原路径，实际读取 canonical 正文。
 
 每次文章运行把实际注入的 writing-skill 主文件保存为本期快照，并在 article context 记录来源与 SHA-256。它让当时的主责契约可核对、可固定；完整复现还依赖相同代码、本期素材与显式输入。主文件引用的外部 reference 不会在无工具流水线里自动加载。
 
@@ -29,7 +30,7 @@
 
 - 可确定执行的行为、退出码与格式：脚本和测试；
 - 视频流程路由与交付边界：本 skill；
-- 频道标题、高光经验：`data/guideline_kedaibiao.md` 与 `data/top_titles.txt`；
+- 封标判断与案例：`skills/video-title-and-cover/`；高光脚本共享其中编辑正文，历史标题样本仍是 `data/top_titles.txt`；
 - 对外文章判断：对应 writing skill；
 - 品牌事实：品牌 owner；
 - 平台限制：运行时查证，不把易变数字写成永久事实。

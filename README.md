@@ -1,6 +1,6 @@
 # 课代表立正 · 视频后期生产
 
-`lizheng-video-production` 把视频或已有字幕整理成可靠的字幕交付和按需发布资产：高光、文章、标题与 YouTube description。仓库同时包含可执行工具和 Codex／Claude skill；自动化边界、外部能力和草稿发布被明确分开。
+`lizheng-video-production` 把视频或已有字幕整理成可靠的字幕交付和按需发布资产：高光、文章、标题与 YouTube description。仓库同时包含可执行工具、视频编排 skill 与可独立使用的 `video-title-and-cover` skill；自动化边界、外部能力和草稿发布被明确分开。
 
 ## 它真正完成什么
 
@@ -11,16 +11,17 @@
 | 说话人区分与可选声纹映射 | 独立脚本 | pyannote + `ffmpeg` |
 | 口头禅／重复／假启动的非破坏性剪辑 | 独立脚本，edit plan 需先审核 | `tools/render_filler_cuts.py` + `ffmpeg` |
 | 双 WAV 漂移对齐、剪前导、社区版压制 | agent 制作 recipe，不是主脚本自动能力 | `ffmpeg`／`ffprobe` |
-| 16:9、3:4 封面 | 设计／外部 skill | Canva、图像工具、`superlinear-brand-usage` |
+| 标题与 16:9、3:4 封面 | 独立封标 skill；图像按需实际制作 | `video-title-and-cover`、可用设计工具与品牌资产 |
 | Google Doc、社区／Circle 草稿 | 外部 connector 或浏览器操作 | 只创建草稿；发布另需批准 |
 
 目录：
 
 ```text
-skill/       任务路由、交付契约和条件制作说明
+skill/       视频任务路由、交付契约和条件制作说明
+skills/video-title-and-cover/  独立封标 skill 与 canonical 规范
 tools/       可执行脚本
 tests/       确定性行为和失败语义测试
-data/        频道基准、术语、writing-skill fallback
+data/        规范兼容链接、频道样本、术语、writing-skill fallback
 DESIGN.md    长期技术决策
 ```
 
@@ -54,7 +55,15 @@ claude --version  # 可选 fallback
 
 ### 安装 skill
 
-Canonical skill name 是 `lizheng-video-editing`。在仓库根目录执行：
+视频编排入口是 `lizheng-video-editing`；只做标题与封面时可以仅安装独立入口。在仓库根目录执行：
+
+```bash
+mkdir -p ~/.codex/skills
+ln -s "$(pwd)/skills/video-title-and-cover" ~/.codex/skills/video-title-and-cover
+test -f ~/.codex/skills/video-title-and-cover/SKILL.md
+```
+
+需要完整视频编排时，再安装：
 
 ```bash
 mkdir -p ~/.codex/skills
@@ -126,7 +135,7 @@ venv/bin/python tools/generate_youtube_description.py /path/to/video.final.srt \
 
 文章按类型只加载一个主责 writing skill：访谈使用 `expert-interview-article`，单口使用 `substance-writing-review`。本机没有当前 skill 时使用 `data/writing-skills/` fallback；其中 `substance-writing-review.md` 同步自公开仓库 `https://github.com/sunyuzheng/substance-writing-review` 的自包含主文件。实际注入的文件、来源和 hash 会保存到本期工作区。自动流水线不会自行读取其中按需引用的外部 reference，因此 fallback 主文件必须能独立承担写作契约。
 
-标题流程会先读取完整文章或带时间线的完整 SRT，保存一份 `packaging_brief.md`。它不概括整期，也不从最稀奇的事实倒推 relevance；它先找核心观众在这个题材上原本就有的观看动机，再扫描能改变理解的强事实、数字、冲突、人物关系和机制，保住可能被摘要磨平的现场问题。候选从一开始就是标题 × 封面组合，先比较不同观看承诺，再磨措辞。独立 challenger 在看见 brief 和首轮候选之前先重读源材料、另做一套候选，下一轮才把两套方案放在一起冷读，以减少首轮锚定；这种模型判断不是观众实测。输入文章并传入 `--source-srt` 时，brief 与 challenger 都优先读取完整逐字稿，文章作为辅助；同一 SRT 另为终审提供 cue-level 开头定位。主流程会自动传入本次 final SRT，终审也直接读取当前频道 guideline。
+标题流程会先读取完整文章或带时间线的完整 SRT，保存一份 `packaging_brief.md`。它不概括整期，也不从最稀奇的事实倒推 relevance；它先找核心观众在这个题材上原本就有的观看动机，再扫描能改变理解的强事实、数字、冲突、人物关系和机制，保住可能被摘要磨平的现场问题。候选从一开始就是标题 × 封面组合，先比较不同观看承诺，再磨措辞。独立 challenger 在看见 brief 和首轮候选之前先重读源材料、另做一套候选，下一轮才把两套方案放在一起冷读，以减少首轮锚定；这种模型判断不是观众实测。输入文章并传入 `--source-srt` 时，brief 与 challenger 都优先读取完整逐字稿，文章作为辅助；同一 SRT 另为终审提供 cue-level 开头定位。主流程会自动传入本次 final SRT，终审也直接读取当前频道 guideline。编辑规范的 owner 是 `skills/video-title-and-cover/references/editorial-judgment.md`，旧 `data/guideline_kedaibiao.md` 为仓内相对链接，标题与高光脚本均直接读到新正文；完整 clone 不依赖本机另一份 skill。
 
 终稿还会把开头当作同一包装的下一拍：访谈里若有干净原话能确认标题承诺并抬高问题，就给出 cue-level in/out 与可回查原话的 package-specific cold open；若最强 premise 需要跨片段综合，则给出可补录的主持人 narrative intro 和进入正片的位置。可用的 `.speaker_labeled.srt` 会自动校验并采用，也可以显式加 `--speaker-srt /path/to/video.speaker_labeled.srt`；没有可靠 sidecar 时不替原片声音强行标注“主持人／嘉宾”。一般高光用于发现 substance，不默认按顺序拼成开场。最终稿仍需要编辑判断，多轮输出不等于自动选中了可发布标题。
 
@@ -241,7 +250,7 @@ venv/bin/python tools/render_filler_cuts.py /path/to/video.mp4 \
 
 ## 外部制作与发布
 
-- 封面默认做独立的 YouTube 16:9 和小红书 3:4 可替换模板；4:3 按需。使用真实人物、`#238343` 品牌识别和正确 LOGO-006，具体见 `skill/references/cover-style-guide.md`。
+- 封标由 `skills/video-title-and-cover/SKILL.md` 主责；完整双平台任务做独立 16:9／3:4，用户只要一个比例就只做该比例。人物选帧、原图要求、排版与实际成图交付见该 skill 的 `references/cover-production.md`；原 `skill/references/cover-style-guide.md` 保留为兼容链接。
 - 双 WAV、剪前导和社区版压制见 `skill/references/longform-community-delivery.md`。这些是 recipe，不是主脚本承诺。
 - Google Doc、Canva 与平台草稿依赖已安装 connector／浏览器能力。仓库不会自动安装或检测这些外部服务。
 - 本地稿与平台 draft 可以直接创建；公开发布、通知、群发或覆盖线上内容前必须展示最终 payload、目的地和受众并取得批准。

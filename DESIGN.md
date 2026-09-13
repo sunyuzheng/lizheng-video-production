@@ -44,7 +44,9 @@ SRT/VTT、article/brief/context/writing-skill 快照、以及清理版视频/重
 
 `article`、`community`、`companion`、`release` 是不同产物契约，而不是文风标签；只有 companion 默认把时间戳变成观看导航。
 
-## 7. 标题从观看动机与内容证据的交点开始
+## 7. 独立封标判断与视频流程协作
+
+封标编辑的单一 owner 是 `skills/video-title-and-cover/`，可独立发现和使用；视频 skill 保留编排与文件契约。`data/guideline_kedaibiao.md` 相对链接到该 skill 的编辑正文，使已有标题与高光 loader 无需新解析器即可读取同一规范；两个旧视觉／研究路径同样保留相对链接，完整 clone 携带目标文件。
 
 标题流程先通读完整材料，辨认核心观众在这个题材上原本就有的观看动机，再寻找最有记忆、拉力与画面的事实、数字、冲突、人物关系和判断来刺穿它。动机可以来自观众自己的判断，也可以来自人物或事件本身已有的意义；它不是编辑事后类比出来的用途。强点可以只来自整期的一段，不承担全文概括。候选从第一轮就是标题 × 封面组合，brief 同时记录观看动机、内容证据、视觉关系、兑现位置与开头衔接。
 
@@ -62,7 +64,7 @@ SRT/VTT、article/brief/context/writing-skill 快照、以及清理版视频/重
 
 | 文件 | 作用 | 维护原则 |
 |---|---|---|
-| `data/guideline_kedaibiao.md` | 频道标题、高光与包装判断 | 只收跨期可复用的机制与条件 |
+| `skills/video-title-and-cover/` | 封标独立 skill、编辑判断、成图与案例 | 只收跨期可复用机制及适用条件；`data/guideline_kedaibiao.md` 是其编辑正文的兼容链接 |
 | `data/top_titles.txt` | 真实高播放标题样本 | 按实际数据更新，不当模板 |
 | `data/verified_hotwords.txt` | 人工确认的跨期 ASR 热词 | 一行一词；单期实体不进入 |
 | `data/verified_corrections.json` | 人工确认的纠错候选 | 有证据且需语境判断，不做盲目全局替换 |
