@@ -115,6 +115,7 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md \
 
 ## 条件能力
 
+- **Riverside 同步版导出**：默认应用 Smart layouts 与 Magic Audio，逐期核实实际开启；双人分屏固定主持人左、嘉宾右，摄像头切换前后都要复查。完整操作与验收见 [Riverside 同步版导出](references/riverside-synced-export.md)。
 - **说话人归因**：访谈需要严格区分主持人与嘉宾时，运行本地 diarization／speaker reference 流程；`UNKNOWN`、`MIXED` 不靠语义强行归人。安装与命令见 README。
 - **口头禅、重复与假启动剪辑**：只在用户要求真实剪辑时做，生成可审查 edit plan，再非破坏性渲染。见 `references/filler-cut-editing.md`。
 - **独立 WAV、剪前导、长视频社区版**：这是 agent/ffmpeg recipe，不是 `process_video.py` 的自动能力。见 `references/longform-community-delivery.md`。

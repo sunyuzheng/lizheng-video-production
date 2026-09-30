@@ -252,6 +252,7 @@ venv/bin/python tools/render_filler_cuts.py /path/to/video.mp4 \
 
 ## 外部制作与发布
 
+- Riverside 同步版的布局、音频处理和换轨验收默认值见 [Riverside 同步版导出](skill/references/riverside-synced-export.md)；由 agent 使用平台界面应用并验证。
 - 封标由 `skills/video-title-and-cover/SKILL.md` 主责；完整双平台任务做独立 16:9／3:4，用户只要一个比例就只做该比例。人物选帧、原图要求、排版与实际成图交付见该 skill 的 `references/cover-production.md`；原 `skill/references/cover-style-guide.md` 保留为兼容链接。
 - 双 WAV、剪前导和社区版压制见 `skill/references/longform-community-delivery.md`。这些是 recipe，不是主脚本承诺。
 - Google Doc、Canva 与平台草稿依赖已安装 connector／浏览器能力。仓库不会自动安装或检测这些外部服务。
