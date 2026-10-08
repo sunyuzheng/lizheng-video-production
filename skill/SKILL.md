@@ -15,7 +15,7 @@ description: 为课代表立正视频完成字幕精校、断句、VTT/QC、高�
 | 单独选标题、封面文案、制作或修改封面图 | `video-title-and-cover` |
 | 普通音视频只转文字，不需要 KDB 字幕交付规格 | `transcribe` |
 | 已有可读访谈材料，只写对外文章／社区帖 | `expert-interview-article` |
-| 单人口播素材要真正剪成可发布短视频 | `kdb-talking-head-short-production` |
+| 自己录的单人口播要剪成可发布成片（长短都行，含字幕、画面、封面、发布文案） | `kdb-talking-head-short-production` |
 | 已有成片要做定时重构、动态图形或复杂视觉包装 | `talking-head-recut`／`hyperframes` |
 | 选择 Superlinear logo、颜色和品牌资产 | `superlinear-brand-usage` |
 
