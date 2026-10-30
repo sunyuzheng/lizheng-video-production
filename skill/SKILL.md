@@ -113,6 +113,8 @@ venv/bin/python tools/generate_titles.py /path/to/video.article.md \
 
 开头直接给 substance：本期具体讨论什么、出现了哪些难得事实或问题、观众为什么可能关心。不要先写“本期适合谁”“最有价值的一条线”之类元叙述。章节使用真实时间戳，从 `00:00` 开始；通过 validator 后才称为可复制交付稿。
 
+工具会在「章节：」上方自动放入固定的超线性学院两行（`不怕AI天天变，就来超线性学院。学点真本事，做点真东西。`和免费加入入口），逐字使用，不按期改写。手写的 B站、视频号、小红书发布文案也带同样两行，不另写一段社区介绍；中文里一律叫「超线性学院」（2026-10-30，owner 是品牌平台 §7）。
+
 ## 条件能力
 
 - **Riverside 同步版导出**：默认应用 Smart layouts 与 Magic Audio，逐期核实实际开启；双人分屏固定主持人左、嘉宾右，摄像头切换前后都要复查。完整操作与验收见 [Riverside 同步版导出](references/riverside-synced-export.md)。
