@@ -54,6 +54,26 @@ PROMPT = """\
 """
 
 
+# 超线性学院对外广告语与入口（2026-10-30 定，逐字使用）；owner：course-marketing-system 品牌平台 §7。
+COMMUNITY_FOOTER = (
+    "不怕AI天天变，就来超线性学院。学点真本事，做点真东西。\n"
+    "免费加入：https://www.superlinear.academy/ （也可以在App Store搜「超线性学院」）"
+)
+
+
+def with_community_footer(text: str) -> str:
+    """把固定的社区一段放在“章节：”上方，章节仍是最后一块。"""
+    if COMMUNITY_FOOTER in text:
+        return text
+    lines = text.replace("\r\n", "\n").split("\n")
+    for index, line in enumerate(lines):
+        if line.strip() in {"章节：", "章节:"}:
+            head = "\n".join(lines[:index]).rstrip()
+            tail = "\n".join(lines[index:])
+            return f"{head}\n\n{COMMUNITY_FOOTER}\n\n{tail}"
+    return f"{text.rstrip()}\n\n{COMMUNITY_FOOTER}\n"
+
+
 def generate_youtube_description(
     srt_path: Path,
     output_dir: Path | None = None,
@@ -78,6 +98,7 @@ def generate_youtube_description(
             raise_for_errors("YouTube description", errors)
         except Exception as error:
             raise type(error)(f"{error}；诊断稿：{invalid_path}") from error
+    candidate_path.write_text(with_community_footer(candidate_text), encoding="utf-8")
     candidate_path.replace(output_path)
     invalid_path.unlink(missing_ok=True)
     return output_path

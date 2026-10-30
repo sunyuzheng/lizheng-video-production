@@ -4,7 +4,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tools.asset_qc import AssetValidationError, validate_title_output, validate_youtube_description
-from tools.generate_youtube_description import PROMPT, generate_youtube_description
+from tools.generate_youtube_description import (
+    COMMUNITY_FOOTER,
+    PROMPT,
+    generate_youtube_description,
+    with_community_footer,
+)
 
 
 SRT = """1
@@ -91,6 +96,30 @@ class YoutubeDescriptionQcTests(unittest.TestCase):
                 delivery.read_text(encoding="utf-8"), "previous good delivery"
             )
             self.assertTrue((root / "episode.youtube-description.invalid.txt").exists())
+
+    def test_delivery_carries_community_line_above_chapters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            srt = root / "episode.final.srt"
+            srt.write_text(SRT, encoding="utf-8")
+
+            def fake_call(_prompt, output_path, model=None):
+                output_path.write_text(
+                    "介绍\n\n章节：\n00:00 开场\n00:15 中段\n00:40 结尾\n",
+                    encoding="utf-8",
+                )
+
+            with patch(
+                "tools.generate_youtube_description.call_content_file_based",
+                side_effect=fake_call,
+            ):
+                delivery = generate_youtube_description(srt, output_dir=root, stem="episode")
+
+            text = delivery.read_text(encoding="utf-8")
+            self.assertIn("不怕AI天天变，就来超线性学院。", text)
+            self.assertLess(text.index(COMMUNITY_FOOTER), text.index("章节："))
+            self.assertEqual(validate_youtube_description(text, srt), [])
+            self.assertEqual(with_community_footer(text), text)
 
 
 class TitleQcTests(unittest.TestCase):
