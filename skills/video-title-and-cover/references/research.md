@@ -32,6 +32,27 @@
 - [Measure key moments for audience retention](https://support.google.com/youtube/answer/9314415)：YouTube 把 Intro 定义为首 30 秒后仍在观看的比例，并明确指出较高值可能意味着开头符合标题与封面的预期且保持兴趣。
 - [A/B test titles & thumbnails](https://support.google.com/youtube/answer/16391400)：此前读取时，测试按观看时长判断结果。实际运行前重新核对可用功能、实验对象与指标，不把当时支持的组数或规则视为永久事实。对本工作流而言，关键是用整条承诺链判断包装，不用高点击掩盖开头失配。
 
+## 缩略图字号与字数
+
+2026-11-04 读取。没有找到 YouTube 或小红书官方的字号要求，以下都是第三方指南和观察性研究。
+
+- [1of10：YouTube Thumbnail Design](https://1of10.com/blog/youtube-thumbnail-design/)：
+  - 在 1280×720 上，主字至少 60–80 像素，次要字至少 40 像素。
+  - 缩到 120 像素宽，每个字都要读得出。
+  - 底部 15% 别放关键信息。
+  - 主字三到五个词。
+  - 这些数字没有给出数据来源，按英文封面写的。
+- [ThumbnailTest：5 Secret Rules](https://thumbnailtest.com/guides/youtube-thumbnail-rules/)：成图缩到 10% 看一遍。字短，不超过 30 个字符。没有数据支持。
+- [vidIQ：YouTube Thumbnail Study（2026-07）](https://vidiq.com/research/youtube-thumbnail-study/)：
+  - 看了 500 条爆款，28% 封面没字，24% 只有一到三个词；有字的封面，中位数是 5 个词。
+  - 作者说明这只描述爆款常见什么，不证明字数造成效果。没有测字号。
+- [Eden：What makes a good YouTube thumbnail](https://eden.so/blog/what-makes-a-good-youtube-thumbnail/)：
+  - 看了 2,960 张封面（来自 507,478 条视频），爆款里有字的平均 6.8 个词。四到六个词这一档，爆款和表现差的差距最大。
+  - 这是观察性研究，差距在 3 个百分点以内的按噪声处理。没有测字号。
+- [Lovart：小红书笔记封面设计](https://www.lovart.ai/zh/blog/zh-xiaohongshu-note-design)：第三方设计文章，建议封面字不超过 10 个、最多两行、大号粗体。
+- 同类封面对照：2026-11-04 在 YouTube 搜“为什么努力了还是没有结果”，从搜索结果和推荐栏里放大估算主字占画面高度。做得好的多在 20%–33%，例如老高與小茉“千萬別努力”里的“努力”约 21%；表现差的约 7%–9%。样本少，又是目测估算，只用来校准量级。
+- 显示尺寸各家说法不一。本工作流以 [cover-production.md](cover-production.md) 里 2026-11-04 的实测为准，平台改版后重新量。
+
 ## Mandy 档案与本对话
 
 - [Mandy × 课代表立正：封面标题交付档案](https://wcnn9ad2kr0b.feishu.cn/wiki/RX7dwLUUJiyVEekXvWBcNZZQncb?from=from_copylink)：2026-09-13 读取了文字与修改记录。与本对话的综合见 [cases.md](cases.md)，包括被放弃的表达、人物不认领的包装、熟悉语句中的意外关系，以及会员与发现流的任务差异。作者报告的表现不等同于独立包装实验。
