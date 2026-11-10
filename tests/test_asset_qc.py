@@ -32,6 +32,23 @@ class YoutubeDescriptionQcTests(unittest.TestCase):
         self.assertIn("不要先写", PROMPT)
         self.assertNotIn("他们为什么值得看看", PROMPT)
 
+    def test_prompt_asks_for_the_guest_line_the_guest_directory_reads(self) -> None:
+        # Open Context fills a new guest's profile from this exact line of the published description.
+        self.assertIn("嘉宾：姓名，身份", PROMPT)
+        self.assertIn("没有交代就只写“嘉宾：姓名”", PROMPT)
+        self.assertIn("单人口播不写这一行", PROMPT)
+
+    def test_guest_line_sits_above_the_community_lines_and_chapters(self) -> None:
+        description = "这是一段介绍。\n\n嘉宾：张三，某公司创始人\n\n章节：\n00:00 开场\n00:15 中段\n00:40 结尾\n"
+        self.assertEqual(self._validate(description), [])
+        delivered = with_community_footer(description)
+        self.assertLess(delivered.index("嘉宾：张三，某公司创始人"), delivered.index(COMMUNITY_FOOTER))
+        self.assertLess(delivered.index(COMMUNITY_FOOTER), delivered.index("章节："))
+
+    def test_guest_label_without_a_name_is_rejected(self) -> None:
+        errors = self._validate("介绍\n\n嘉宾：\n\n章节：\n00:00 开场\n00:15 中段\n00:40 结尾\n")
+        self.assertTrue(any("嘉宾" in error for error in errors), errors)
+
     def _validate(self, description: str) -> list[str]:
         with tempfile.TemporaryDirectory() as tmp:
             srt = Path(tmp) / "episode.final.srt"

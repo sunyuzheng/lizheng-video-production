@@ -91,6 +91,11 @@ def validate_youtube_description(text: str, srt_path: Path) -> list[str]:
     if not chapter_lines:
         return ["“章节：”后没有章节"]
 
+    # The guest directory reads “嘉宾：姓名，身份”; a label with nothing after it gives it no one to name.
+    for line in lines[: marker_indexes[0]]:
+        if re.fullmatch(r"\s*嘉宾\s*[：:]\s*", line):
+            errors.append("“嘉宾：”后没有姓名；有嘉宾写“嘉宾：姓名，身份”，没有嘉宾就不写这一行")
+
     chapters: list[tuple[str, int]] = []
     for line in chapter_lines:
         match = _CHAPTER_RE.fullmatch(line)
